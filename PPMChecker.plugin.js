@@ -3,9 +3,7 @@
  * @author m0nkey.d.fluffy
  * @description Automatically runs /clear then /ppm every 30 mins, monitors the response, and restarts the cluster if PPM is 0.
  * @version 1.0.1
- * @source https://github.com/m0nkey-d-fluffy/betterdiscord-plugins
- * @website https://m0nkey-d-fluffy.github.io/
- * @invite YOUR_INVITE_CODE
+ * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
 /*@cc_on
@@ -729,5 +727,6 @@ function PPMChecker(meta) {
         }
     };
 }
+
 
 /*@end@*/
