@@ -1,0 +1,295 @@
+﻿<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome file</title>
+  <link rel="stylesheet" href="https://stackedit.io/style.css" />
+</head>
+
+<body class="stackedit">
+  <div class="stackedit__html"><h1 id="ppmchecker-plugin-for-betterdiscord">PPMChecker Plugin for BetterDiscord</h1>
+<p><strong>Author:</strong> m0nkey.d.fluffy <strong>Version:</strong> 1.0.1</p>
+<h2 id="description">Description</h2>
+<p>PPMChecker is an automation plugin for BetterDiscord designed to monitor a bot’s status via the <code>/ppm</code> command. It runs a check every 30 minutes and performs automated recovery actions based on the bot’s response.</p>
+<ul>
+<li>
+<p><strong>Automatic Check:</strong> Every 30 minutes, the plugin automatically runs <code>/clear</code> and then <code>/ppm</code> in a specific channel.</p>
+</li>
+<li>
+<p><strong>Smart Recovery:</strong></p>
+<ul>
+<li>
+<p>If <strong>PPM: 0</strong> is detected, the plugin sends a <code>/stop</code> command, waits 6 minutes, then sends a <code>/start</code> command.</p>
+</li>
+<li>
+<p>If <strong>“Cluster not started”</strong> is detected (or the check times out), the plugin immediately sends a <code>/start</code> command.</p>
+</li>
+<li>
+<p>If <strong>PPM &gt; 0</strong>, no action is taken.</p>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>Notifications:</strong> The plugin can send alert messages to a Discord channel of your choice to notify you of these recovery actions.</p>
+</li>
+</ul>
+<h2 id="installation">Installation</h2>
+<ol>
+<li>
+<p>Download the <code>PPMChecker.plugin.js</code> file.</p>
+</li>
+<li>
+<p>Open your BetterDiscord plugins folder. You can find this in Discord by going to <strong>User Settings &gt; BetterDiscord &gt; Plugins &gt; Open Plugins Folder</strong>.</p>
+</li>
+<li>
+<p>Drag the downloaded <code>PPMChecker.plugin.js</code> file into this folder.</p>
+</li>
+<li>
+<p>Return to Discord. If you don’t see the plugin appear, press <code>Ctrl+R</code> to reload Discord.</p>
+</li>
+<li>
+<p>Find <strong>PPMChecker</strong> in your plugin list and enable it.</p>
+</li>
+</ol>
+<h2 id="configuration-required-for-notifications">Configuration (Required for Notifications)</h2>
+<p>This plugin uses a <code>PPMChecker.config.json</code> file for settings, which is more stable than an in-app menu.</p>
+<h3 id="step-1-generate-the-config-file">Step 1: Generate the Config File</h3>
+<p>When you enable <strong>PPMChecker</strong> for the first time, it will automatically create a file named <code>PPMChecker.config.json</code> in your BetterDiscord <code>plugins</code> folder.</p>
+<h3 id="step-2-get-your-notification-channel-id">Step 2: Get Your Notification Channel ID</h3>
+<ol>
+<li>
+<p>In Discord, turn on <strong>Developer Mode</strong> (User Settings &gt; Advanced &gt; Developer Mode).</p>
+</li>
+<li>
+<p>Right-click on the text channel where you want to receive notifications (e.g., <code>#bot-status</code>).</p>
+</li>
+<li>
+<p>Click <strong>“Copy Channel ID”</strong>.</p>
+</li>
+</ol>
+<h3 id="step-3-edit-the-config-file">Step 3: Edit the Config File</h3>
+<ol>
+<li>
+<p>Go to your <code>plugins</code> folder (the same place you put the plugin file).</p>
+</li>
+<li>
+<p>Open <code>PPMChecker.config.json</code> with any text editor (like Notepad).</p>
+</li>
+<li>
+<p>You will see:</p>
+<pre><code>{
+    "notificationChannelId": ""
+}
+
+</code></pre>
+</li>
+<li>
+<p>Paste your copied Channel ID inside the quotes:</p>
+<pre><code>{
+    "notificationChannelId": "1234567890123456789"
+}
+
+</code></pre>
+</li>
+<li>
+<p>Save and close the file.</p>
+</li>
+</ol>
+<h3 id="step-4-reload-the-plugin">Step 4: Reload the Plugin</h3>
+<p>For the new settings to take effect, you must reload the plugin. The easiest way is to <strong>toggle the PPMChecker plugin off and on again</strong> in your BetterDiscord settings.</p>
+<p>On this first run, the plugin will send a test message to your configured channel to confirm notifications are working.</p>
+<h2 id="how-to-use">How to Use</h2>
+<h3 id="automatic-mode-default">Automatic Mode (Default)</h3>
+<p>Once the plugin is enabled and configured, it runs entirely on its own. You do not need to do anything. It will perform the <code>/clear</code> and <code>/ppm</code> check every 30 minutes and log all its actions to your Discord console (press <code>Ctrl+Shift+I</code> to view it).</p>
+<h3 id="manual-commands-for-testing">Manual Commands (For Testing)</h3>
+<p>You can manually trigger the plugin’s functions from the Discord Console (<code>Ctrl+Shift+I</code> and go to the “Console” tab).</p>
+<ul>
+<li>
+<p><strong>Run the full check (clear, ppm, and recovery) immediately:</strong></p>
+<pre><code>BdApi.Plugins.get("PPMChecker").instance.RunPPMCheck()
+
+</code></pre>
+</li>
+<li>
+<p><strong>Only send the <code>/start</code> command:</strong></p>
+<pre><code>BdApi.Plugins.get("PPMChecker").instance.SendStartCommand()
+
+</code></pre>
+</li>
+<li>
+<p><strong>Only send the <code>/stop</code> command:</strong></p>
+<pre><code>BdApi.Plugins.get("PPMChecker").instance.SendStopCommand()
+
+</code></pre>
+</li>
+</ul>
+<h2 id="full-workflow-breakdown">Full Workflow Breakdown</h2>
+<p>This is the complete logic the plugin follows.</p>
+<h3 id="plugin-start">1. Plugin Start</h3>
+<ol>
+<li>
+<p><strong>Name Set:</strong> The plugin’s name is internally set to <code>PPMChecker</code> for logging.</p>
+</li>
+<li>
+<p><strong>Config Loaded:</strong> The plugin looks for <code>PPMChecker.config.json</code>.</p>
+<ul>
+<li>
+<p><strong>If found:</strong> It loads the <code>notificationChannelId</code>.</p>
+</li>
+<li>
+<p><strong>If not found:</strong> It creates a new, blank <code>PPMChecker.config.json</code> for you to edit.</p>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>Logs Config Status:</strong> It prints a pink message to your console telling you if the channel ID was loaded or if it’s missing (disabling notifications).</p>
+</li>
+<li>
+<p><strong>Scheduler Started:</strong> The plugin calls <code>runScheduler()</code> for the <strong>first time</strong> and then sets <code>setInterval</code> to call <code>runScheduler()</code> again every 30 minutes.</p>
+</li>
+</ol>
+<h3 id="first-run-module-loading">2. First Run: Module Loading</h3>
+<p>The very first time <code>runScheduler()</code> is called (immediately on plugin start), it performs a one-time setup:</p>
+<ol>
+<li>
+<p><strong>Finds Command Executor:</strong> It finds the internal Discord function for sending slash commands.</p>
+</li>
+<li>
+<p><strong>Patches Dispatcher:</strong> It finds Discord’s core Event Dispatcher and “patches” it to listen for <code>MESSAGE_CREATE</code> and <code>MESSAGE_UPDATE</code> events (which is how it sees the bot’s hidden reply).</p>
+</li>
+<li>
+<p><strong>Finds Send Message:</strong> It finds the simple, stable <code>sendMessage</code> function for sending notifications.</p>
+</li>
+<li>
+<p><strong>Sends Test Notification:</strong> If a <code>notificationChannelId</code> is set, it immediately sends a test message to that channel to confirm the notification system is working.</p>
+</li>
+</ol>
+<h3 id="the-30-minute-loop-runscheduler">3. The 30-Minute Loop (<code>runScheduler</code>)</h3>
+<p>This is the main loop that runs every 30 minutes (and also on the very first start).</p>
+<ul>
+<li>
+<p><strong>Step 1: Execute <code>/clear</code></strong></p>
+<ul>
+<li>The plugin executes the <code>/clear</code> slash command in the target channel.</li>
+</ul>
+</li>
+<li>
+<p><strong>Step 2: Wait</strong></p>
+<ul>
+<li>The plugin waits for <strong>10 seconds</strong>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Step 3: Execute <code>/ppm</code> &amp; Start Listening</strong></p>
+<ul>
+<li>
+<p>The plugin executes the <code>/ppm</code> slash command in the same channel.</p>
+</li>
+<li>
+<p>It simultaneously starts a <strong>15-second timer</strong> and prepares to “catch” the bot’s response.</p>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-response-four-possible-outcomes">4. The Response: Four Possible Outcomes</h3>
+<p>During this 15-second window, the plugin’s dispatcher patch is actively scanning all messages from the bot in that channel.</p>
+<ul>
+<li>
+<p><strong>✅ Case 1: Healthy (PPM &gt; 0)</strong></p>
+<ul>
+<li>
+<p><strong>Trigger:</strong> The listener finds <code>PPM: [value]</code> (e.g., “PPM: 1.23”) in the bot’s message.</p>
+</li>
+<li>
+<p><strong>Action:</strong> Logs a <strong>GREEN</strong> “✅ PPM Value CAPTURED” message to your console. The scheduler finishes, and the 30-minute timer for the <em>next</em> run continues.</p>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>❌ Case 2: Stalled (PPM = 0)</strong></p>
+<ul>
+<li>
+<p><strong>Trigger:</strong> The listener finds <code>PPM: 0</code> in the bot’s message.</p>
+</li>
+<li>
+<p><strong>Action:</strong></p>
+<ol>
+<li>
+<p>Logs a <strong>RED</strong> “❌ PPM Value CAPTURED” message.</p>
+</li>
+<li>
+<p>Sends a “⚠️ PPM value was 0…” alert to your notification channel.</p>
+</li>
+<li>
+<p>Executes <code>/stop</code>.</p>
+</li>
+<li>
+<p>Waits for <strong>6 minutes</strong>.</p>
+</li>
+<li>
+<p>Executes <code>/start</code>.</p>
+</li>
+<li>
+<p>The scheduler loop finishes.</p>
+</li>
+</ol>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>❌ Case 3: Offline (“Cluster not started”)</strong></p>
+<ul>
+<li>
+<p><strong>Trigger:</strong> The listener finds the text <code>"Cluster not started"</code> in the bot’s message.</p>
+</li>
+<li>
+<p><strong>Action:</strong></p>
+<ol>
+<li>
+<p>Logs (pink) “Cluster Status CAPTURED… Initiating /start.”</p>
+</li>
+<li>
+<p>Sends a “❌ …Cluster reported as “Cluster not started”…” alert to your notification channel.</p>
+</li>
+<li>
+<p>Executes <code>/start</code> <strong>immediately</strong>.</p>
+</li>
+<li>
+<p>The scheduler loop finishes.</p>
+</li>
+</ol>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>⏱️ Case 4: Timeout (No Response)</strong></p>
+<ul>
+<li>
+<p><strong>Trigger:</strong> The 15-second timer expires before any known message is captured.</p>
+</li>
+<li>
+<p><strong>Action:</strong></p>
+<ol>
+<li>
+<p>Logs (pink/error) “PPM check timed out… Initiating /start command.”</p>
+</li>
+<li>
+<p>Sends a “⏱️ …PPM check timed out…” alert to your notification channel.</p>
+</li>
+<li>
+<p>Executes <code>/start</code> <strong>immediately</strong>.</p>
+</li>
+<li>
+<p>The scheduler loop finishes.</p>
+</li>
+</ol>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</body>
+
+</html>
