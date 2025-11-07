@@ -1,7 +1,7 @@
 /**
  * @name PPMChecker
  * @author m0nkey.d.fluffy
- * @description Automatically runs /clear then /ppm every 30 mins, monitors the response, and restarts the cluster if PPM is 0.
+ * @description Automatically runs /clear then /ppm every 15 mins, monitors the response, and restarts the cluster if PPM is 0.
  * @version 1.0.2
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
@@ -752,3 +752,4 @@ function PPMChecker(meta) {
 }
 
 /*@end@*/
+
