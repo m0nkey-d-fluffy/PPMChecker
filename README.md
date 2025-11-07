@@ -1,13 +1,13 @@
 
 # PPMChecker Plugin for BetterDiscord
 
-**Author:** m0nkey.d.fluffy **Version:** 1.0.1
+**Author:** m0nkey.d.fluffy **Version:** 1.0.2
 
 ## Description
 
-PPMChecker is an automation plugin for BetterDiscord designed to monitor a bot's status via the `/ppm` command. It runs a check every 30 minutes and performs automated recovery actions based on the bot's response.
+PPMChecker is an automation plugin for BetterDiscord designed to monitor a bot's status via the `/ppm` command. It runs a check every 15 minutes and performs automated recovery actions based on the bot's response.
 
--   **Automatic Check:** Every 30 minutes, the plugin automatically runs `/clear` and then `/ppm` in a specific channel.
+-   **Automatic Check:** Every 15 minutes, the plugin automatically runs `/clear` and then `/ppm` in a specific channel.
     
 -   **Smart Recovery:**
     
@@ -61,6 +61,7 @@ When you enable **PPMChecker** for the first time, it will automatically create 
     ```
     {
         "notificationChannelId": ""
+        "sendClearCommand": true
     }
     
     ```
@@ -70,11 +71,14 @@ When you enable **PPMChecker** for the first time, it will automatically create 
     ```
     {
         "notificationChannelId": "1234567890123456789"
+        "sendClearCommand": true
     }
     
     ```
     
-5.  Save and close the file.
+5.  **Optional:** If you do not want to run the /clear command, change the sendClearCommand flag to false. Do not use quotes.
+
+6.  Save and close the file. 
     
 
 ### Step 4: Reload the Plugin
@@ -131,7 +135,7 @@ This is the complete logic the plugin follows.
         
 3.  **Logs Config Status:** It prints a pink message to your console telling you if the channel ID was loaded or if it's missing (disabling notifications).
     
-4.  **Scheduler Started:** The plugin calls `runScheduler()` for the **first time** and then sets `setInterval` to call `runScheduler()` again every 30 minutes.
+4.  **Scheduler Started:** The plugin calls `runScheduler()` for the **first time** and then sets `setInterval` to call `runScheduler()` again every 15 minutes.
     
 
 ### 2. First Run: Module Loading
@@ -147,9 +151,9 @@ The very first time `runScheduler()` is called (immediately on plugin start), it
 4.  **Sends Test Notification:** If a `notificationChannelId` is set, it immediately sends a test message to that channel to confirm the notification system is working.
     
 
-### 3. The 30-Minute Loop (`runScheduler`)
+### 3. The 15-Minute Loop (`runScheduler`)
 
-This is the main loop that runs every 30 minutes (and also on the very first start).
+This is the main loop that runs every 15 minutes (and also on the very first start).
 
 -   **Step 1: Execute `/clear`**
     
@@ -172,9 +176,9 @@ During this 15-second window, the plugin's dispatcher patch is actively scanning
 
 -   **✅ Case 1: Healthy (PPM > 0)**
     
-    -   **Trigger:** The listener finds `PPM: [value]` (e.g., "PPM: 1.23") in the bot's message.
+    -   **Trigger:** The listener finds `PPM: [value]` (e.g., "PPM: 119") in the bot's message.
         
-    -   **Action:** Logs a **GREEN** "✅ PPM Value CAPTURED" message to your console. The scheduler finishes, and the 30-minute timer for the _next_ run continues.
+    -   **Action:** Logs a **GREEN** "✅ PPM Value CAPTURED" message to your console. The scheduler finishes, and the 15-minute timer for the _next_ run continues.
         
 -   **❌ Case 2: Stalled (PPM = 0)**
     
