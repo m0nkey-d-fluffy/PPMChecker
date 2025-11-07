@@ -45,7 +45,7 @@ When you enable **PPMChecker** for the first time, it will automatically create 
 
 1.  In Discord, turn on **Developer Mode** (User Settings > Advanced > Developer Mode).
     
-2.  Right-click on the text channel where you want to receive notifications (e.g., `#bot-status`).
+2.  Right-click on the text channel where you want to receive notifications (e.g., `#bot-status`). Note that this should be YOUR channel on your own private server; you don't want to be spamming public channels. 
     
 3.  Click **"Copy Channel ID"**.
     
