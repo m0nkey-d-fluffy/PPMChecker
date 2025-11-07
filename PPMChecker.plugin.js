@@ -50,9 +50,7 @@ function PPMChecker(meta) {
     const CLUSTER_OFFLINE_STRING = "Cluster not started";
     const CLUSTER_OFFLINE_MARKER = "CLUSTER_OFFLINE_MARKER";
 
-    // --- COMMAND DATA: Extracted from V17 Payloads ---
-    
-    // (New command)
+    // This is the /clear command ID that is used by @Dreama. This is used for our /clear payload.
     const CLEAR_COMMAND = {
         name: "clear",
         commandId: "1416039398792888330",
@@ -69,6 +67,7 @@ function PPMChecker(meta) {
         ]
     };
 
+    // This is the /ppm command ID that is used by @Dreama. This is used for our /ppm payload.
     const PPM_COMMAND = {
         name: "ppm",
         commandId: "1414334983707033774",
@@ -77,7 +76,8 @@ function PPMChecker(meta) {
         rank: 1,
         options: []
     };
-    
+
+    // This is the /stop command ID that is used by @Dreama. This is used for our /stop payload.
     const STOP_COMMAND = {
         name: "stop",
         commandId: "1414334983707033773",
@@ -96,7 +96,7 @@ function PPMChecker(meta) {
         options: []
     };
 
-    // The sequence of commands to run every 30 minutes. (Order matters)
+    // The sequence of commands to run every 15 minutes. (Order matters)
     const COMMANDS = [CLEAR_COMMAND, PPM_COMMAND]; 
 
     // Internal state
@@ -139,7 +139,7 @@ function PPMChecker(meta) {
 
     // --- UTILITIES ---
 
-    /** A helper to safely log messages with pink highlight for notices. */
+    /** A helper to safely log messages into the console with pink highlight for notices. */
     const log = (message, type = "info") => {
         try {
             const method = console[type] && typeof console[type] === 'function' ? console[type] : console.log;
@@ -379,7 +379,7 @@ function PPMChecker(meta) {
     };
     
     /**
-     * Finds Discord's internal sendMessage function. (Using a more robust filter)
+     * Finds Discord's internal sendMessage function.
      */
     const loadSendMessageModule = async () => {
         try {
@@ -399,7 +399,7 @@ function PPMChecker(meta) {
     };
 
     /**
-     * [NEW] Finds Discord's internal NonceGenerator.
+     *  Finds Discord's internal NonceGenerator.
      */
     const loadNonceGenerator = async () => {
         try {
@@ -454,7 +454,7 @@ function PPMChecker(meta) {
         log(`Attempting to execute SLIDE COMMAND: "/${name}" to channel ID ${CONFIG.CHANNEL_ID}`, "info");
 
         try {
-            // Rebuild the required command/context objects using the V17 diagnostic data
+            // Build the required command/context objects that are expected when sending SLIDE COMMANDS to @Dreama
             const realCommand = {
                 id: command.commandId,
                 version: command.commandVersion,
@@ -541,7 +541,7 @@ function PPMChecker(meta) {
         }
     };
 
-    /** The main scheduler loop that runs every 30 minutes, handling conditional restarts. */
+    /** The main scheduler loop that runs every 15 minutes, handling conditional restarts. */
     const runScheduler = async () => {
         // Load modules only once on the very first run
         if (!_modulesLoaded) {
@@ -689,8 +689,6 @@ function PPMChecker(meta) {
             log("Plugin stopped. Interval cleared and dispatcher patch removed.", "info");
             showToast("PPMChecker stopped.", "info");
         },
-        
-        // Removed getSettingsPanel()
         
         // --- MANUAL EXECUTION METHODS ---
 
