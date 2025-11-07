@@ -62,8 +62,7 @@ When you enable **PPMChecker** for the first time, it will automatically create 
     {
         "notificationChannelId": ""
         "sendClearCommand": true
-    }
-    
+    }  
     ```
     
 4.  Paste your copied Channel ID inside the quotes:
@@ -72,8 +71,7 @@ When you enable **PPMChecker** for the first time, it will automatically create 
     {
         "notificationChannelId": "1234567890123456789"
         "sendClearCommand": true
-    }
-    
+    }   
     ```
     
 5.  **Optional:** If you do not want to run the /clear command, change the sendClearCommand flag to false. Do not use quotes.
@@ -101,21 +99,18 @@ You can manually trigger the plugin's functions from the Discord Console (`Ctrl+
     
     ```
     BdApi.Plugins.get("PPMChecker").instance.RunPPMCheck()
-    
     ```
     
 -   **Only send the `/start` command:**
     
     ```
     BdApi.Plugins.get("PPMChecker").instance.SendStartCommand()
-    
     ```
     
 -   **Only send the `/stop` command:**
     
     ```
     BdApi.Plugins.get("PPMChecker").instance.SendStopCommand()
-    
     ```
     
 
