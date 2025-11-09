@@ -1,13 +1,13 @@
 
 # PPMChecker Plugin for BetterDiscord
 
-**Author:** m0nkey.d.fluffy **Version:** 1.0.2
+**Author:** m0nkey.d.fluffy **Version:** 1.0.4
 
 ## Description
 
 PPMChecker is an automation plugin for BetterDiscord designed to monitor a bot's status via the `/ppm` command. It runs a check every 15 minutes and performs automated recovery actions based on the bot's response.
 
--   **Automatic Check:** Every 15 minutes, the plugin automatically runs `/clear` and then `/ppm` in a specific channel.
+-   **Automatic Check:** Every 15 minutes, the plugin automatically runs `/ppm` in a specific channel. It can also optionally run `/clear` first.
     
 -   **Smart Recovery:**
     
@@ -17,14 +17,16 @@ PPMChecker is an automation plugin for BetterDiscord designed to monitor a bot's
         
     -   If **PPM > 0**, no action is taken.
         
--   **Notifications:** The plugin can send alert messages to a Discord channel of your choice to notify you of these recovery actions.
+-   **Notifications:** The plugin sends alert messages to a Discord channel of your choice to notify you of recovery actions.
+    
+-   **Configurable:** All settings, including notification channel, /clear, and verbose logging, are now managed in the BetterDiscord plugin settings menu.
     
 
 ## Installation
 
 1.  Download the `PPMChecker.plugin.js` file.
     
-2.  Open your BetterDiscord plugins folder. You can find this in Discord by going to **User Settings > BetterDiscord > Plugins > Open Plugins Folder**.
+2.  Open your BetterDiscord plugins folder. You can find this in Discord by going to **User Settings > Plugins > Open Plugins Folder**.
     
 3.  Drag the downloaded `PPMChecker.plugin.js` file into this folder.
     
@@ -33,63 +35,45 @@ PPMChecker is an automation plugin for BetterDiscord designed to monitor a bot's
 5.  Find **PPMChecker** in your plugin list and enable it.
     
 
-## Configuration (Required for Notifications)
+## Configuration
 
-This plugin uses a `PPMChecker.config.json` file for settings, which is more stable than an in-app menu.
+All settings are now managed inside the BetterDiscord settings panel. **The `PPMChecker.config.json` file is no longer used.**
 
-### Step 1: Generate the Config File
-
-When you enable **PPMChecker** for the first time, it will automatically create a file named `PPMChecker.config.json` in your BetterDiscord `plugins` folder.
-
-### Step 2: Get Your Notification Channel ID
-
-1.  In Discord, turn on **Developer Mode** (User Settings > Advanced > Developer Mode).
+1.  In Discord, go to **User Settings > Plugins**.
     
-2.  Right-click on the text channel where you want to receive notifications (e.g., `#bot-status`). Note that this should be YOUR channel on your own private server; you don't want to be spamming public channels. 
+2.  Find **PPMChecker** in your plugin list and click the **Settings** button.
     
-3.  Click **"Copy Channel ID"**.
+3.  Configure the options in the menu that appears.
     
 
-### Step 3: Edit the Config File
+### Settings Options
 
-1.  Go to your `plugins` folder (the same place you put the plugin file).
+-   **Notification Channel ID**
     
-2.  Open `PPMChecker.config.json` with any text editor (like Notepad).
+    -   Paste the Channel ID where you want to receive alerts and logs.
+        
+    -   To get this, turn on **Developer Mode** (User Settings > Advanced > Developer Mode), then right-click your desired channel and select **"Copy Channel ID"**.
+        
+-   **Send /clear command** (Default: ON)
     
-3.  You will see:
+    -   When enabled, the plugin will execute the `/clear` command 10 seconds _before_ running the `/ppm` command.
+        
+    -   Toggle this OFF if you do not want the plugin to run `/clear`.
+        
+-   **Verbose Logging** (Default: OFF)
     
-    ```
-    {
-        "notificationChannelId": ""
-        "sendClearCommand": true
-    }  
-    ```
-    
-4.  Paste your copied Channel ID inside the quotes:
-    
-    ```
-    {
-        "notificationChannelId": "1234567890123456789"
-        "sendClearCommand": true
-    }   
-    ```
-    
-5.  **Optional:** If you do not want to run the /clear command, change the sendClearCommand flag to false. Do not use quotes.
+    -   When enabled, the plugin will send _all_ captured PPM responses (e.g., "✅ PPM Value: 120") to your notification channel.
+        
+    -   When disabled (default), the plugin will _only_ send alerts for critical events (0 PPM, cluster offline, or timeout).
+        
 
-6.  Save and close the file. 
-    
-
-### Step 4: Reload the Plugin
-
-For the new settings to take effect, you must reload the plugin. The easiest way is to **toggle the PPMChecker plugin off and on again** in your BetterDiscord settings.
-
-On this first run, the plugin will send a test message to your configured channel to confirm notifications are working.
+On the first run after configuration, the plugin will send a test message to your configured channel to confirm notifications are working.
 
 ## How to Use
 
 ### Automatic Mode (Default)
 
-Once the plugin is enabled and configured, it runs entirely on its own. You do not need to do anything. It will perform the `/clear` and `/ppm` check every 30 minutes and log all its actions to your Discord console (press `Ctrl+Shift+I` to view it).
+Once the plugin is enabled and configured, it runs entirely on its own. You do not need to do anything. It will perform its check every 15 minutes and log all its actions to your Discord console (press `Ctrl+Shift+I` to view it).
 
 ### Manual Commands (For Testing)
 
@@ -122,13 +106,9 @@ This is the complete logic the plugin follows.
 
 1.  **Name Set:** The plugin's name is internally set to `PPMChecker` for logging.
     
-2.  **Config Loaded:** The plugin looks for `PPMChecker.config.json`.
+2.  **Settings Loaded:** The plugin loads its settings (Channel ID, sendClear, isVerbose) from BetterDiscord's internal storage.
     
-    -   **If found:** It loads the `notificationChannelId`.
-        
-    -   **If not found:** It creates a new, blank `PPMChecker.config.json` for you to edit.
-        
-3.  **Logs Config Status:** It prints a pink message to your console telling you if the channel ID was loaded or if it's missing (disabling notifications).
+3.  **Logs Settings Status:** It prints a pink message to your console detailing the loaded settings.
     
 4.  **Scheduler Started:** The plugin calls `runScheduler()` for the **first time** and then sets `setInterval` to call `runScheduler()` again every 15 minutes.
     
@@ -150,17 +130,19 @@ The very first time `runScheduler()` is called (immediately on plugin start), it
 
 This is the main loop that runs every 15 minutes (and also on the very first start).
 
--   **Step 1: Execute `/clear`**
+-   **Step 1: Check for `/clear`**
     
-    -   The plugin executes the `/clear` slash command in the target channel.
+    -   If the **"Send /clear command"** setting is **ON**:
         
--   **Step 2: Wait**
-    
-    -   The plugin waits for **10 seconds**.
+        -   The plugin executes the `/clear` slash command.
+            
+        -   It then waits for **10 seconds**.
+            
+    -   If the setting is **OFF**, this step is skipped entirely.
         
--   **Step 3: Execute `/ppm` & Start Listening**
+-   **Step 2: Execute `/ppm` & Start Listening**
     
-    -   The plugin executes the `/ppm` slash command in the same channel.
+    -   The plugin executes the `/ppm` slash command.
         
     -   It simultaneously starts a **15-second timer** and prepares to "catch" the bot's response.
         
@@ -171,31 +153,39 @@ During this 15-second window, the plugin's dispatcher patch is actively scanning
 
 -   **✅ Case 1: Healthy (PPM > 0)**
     
-    -   **Trigger:** The listener finds `PPM: [value]` (e.g., "PPM: 119") in the bot's message.
-        
-    -   **Action:** Logs a **GREEN** "✅ PPM Value CAPTURED" message to your console. The scheduler finishes, and the 15-minute timer for the _next_ run continues.
-        
--   **❌ Case 2: Stalled (PPM = 0)**
-    
-    -   **Trigger:** The listener finds `PPM: 0` in the bot's message.
+    -   **Trigger:** The listener finds `PPM: [value]` (e.g., "PPM: 119").
         
     -   **Action:**
         
-        1.  Logs a **RED** "❌ PPM Value CAPTURED" message.
+        1.  Logs a **GREEN** "✅ PPM Value CAPTURED" message to your console.
             
-        2.  Sends a "⚠️ PPM value was 0..." alert to your notification channel.
+        2.  If **"Verbose Logging"** is **ON**, it sends a "✅ PPM Value: 119" message to your notification channel.
             
-        3.  Executes `/stop`.
+        3.  The scheduler finishes.
             
-        4.  Waits for **6 minutes**.
+-   **❌ Case 2: Stalled (PPM = 0)**
+    
+    -   **Trigger:** The listener finds `PPM: 0`.
+        
+    -   **Action:**
+        
+        1.  Logs a **RED** "❌ PPM Value CAPTURED" message to your console.
             
-        5.  Executes `/start`.
+        2.  If **"Verbose Logging"** is **ON**, it sends a "❌ PPM Value: 0" message.
             
-        6.  The scheduler loop finishes.
+        3.  Sends a "⚠️ PPM value was 0..." alert to your notification channel (this sends regardless of verbose setting).
+            
+        4.  Executes `/stop`.
+            
+        5.  Waits for **6 minutes**.
+            
+        6.  Executes `/start`.
+            
+        7.  The scheduler loop finishes.
             
 -   **❌ Case 3: Offline ("Cluster not started")**
     
-    -   **Trigger:** The listener finds the text `"Cluster not started"` in the bot's message.
+    -   **Trigger:** The listener finds the text `"Cluster not started"`.
         
     -   **Action:**
         

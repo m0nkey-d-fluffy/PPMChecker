@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automatically runs /clear then /ppm every 15 mins, monitors the response, and restarts the cluster if PPM is 0.
- * @version 1.0.3
+ * @version 1.0.4
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -27,18 +27,50 @@
     }
 @else@*/
 
+// --- Config for Settings Panel ---
+const pluginConfig = {
+    settings: [
+        {
+            type: "text",
+            id: "notificationChannelId",
+            name: "Notification Channel ID",
+            note: "Channel ID to send alerts and verbose logs to. (e.g., 123456789012345678)",
+            value: ""
+        },
+        {
+            type: "switch",
+            id: "sendClearCommand",
+            name: "Send /clear command",
+            note: "Whether to run /clear before /ppm. (Default: true)",
+            value: true
+        },
+        {
+            type: "switch",
+            id: "isVerbose",
+            name: "Verbose Logging",
+            note: "Send all captured PPM responses (including > 0) to the notification channel. (Default: false)",
+            value: false
+        }
+    ]
+};
+
+function getSetting(key) {
+    return pluginConfig.settings.reduce((found, setting) => found ? found : (setting.id === key ? setting : setting.settings?.find(s => s.id === key)), undefined)
+}
+
+
 function PPMChecker(meta) {
 
-    // --- NODE.JS MODULES ---
-    // Node.js modules provided by the BetterDiscord environment
+    // --- NODE.JS / BD MODULES ---
     const fs = require("fs");
     const path = require("path");
+    const React = BdApi.React;
 
     // --- CONFIGURATION: Core IDs and Timing ---
     const CONFIG = {
         CHANNEL_ID: "1343184699018842202",
         GUILD_ID: "1334603881652555896",
-        BOT_APPLICATION_ID: "1334630845574676520", 
+        BOT_APPLICATION_ID: "1334630845574676520",
         INTERVAL_MS: 15 * 60 * 1000,         // 15 minutes for scheduling
         CLEAR_DELAY_MS: 10 * 1000,           // 10 seconds delay between /clear and /ppm
         RELOAD_DELAY_MS: 6 * 60 * 1000,      // 6 minutes delay between /stop and /start
@@ -50,7 +82,7 @@ function PPMChecker(meta) {
     const CLUSTER_OFFLINE_MARKER = "CLUSTER_OFFLINE_MARKER";
 
     // --- COMMAND DATA: Extracted from V17 Payloads ---
-    
+
     const CLEAR_COMMAND = {
         name: "clear",
         commandId: "1416039398792888330",
@@ -75,7 +107,7 @@ function PPMChecker(meta) {
         rank: 1,
         options: []
     };
-    
+
     const STOP_COMMAND = {
         name: "stop",
         commandId: "1414334983707033773",
@@ -97,39 +129,36 @@ function PPMChecker(meta) {
     // Internal state
     let interval = null;
     let _executeCommand = null;
-    let _dispatcher = null; 
+    let _dispatcher = null;
     let _sendMessage = null; // For sending notifications
     let _modulesLoaded = false;
     let _ppmResolve = null; // Function to resolve the current PPM check Promise
 
-    // --- SETTINGS MANAGEMENT (via config.json) ---
-    const configPath = path.join(BdApi.Plugins.folder, "PPMChecker.config.json");
-    const defaultSettings = {
-        notificationChannelId: "", // Channel ID to forward matching messages to.
-        sendClearCommand: true     // Whether to run /clear before /ppm
-    };
-    let currentSettings = { ...defaultSettings };
-
-    const loadConfig = () => {
-        if (!fs.existsSync(configPath)) {
-            log(`Config file not found, creating one at: ${configPath}`, "warn");
-            try {
-                fs.writeFileSync(configPath, JSON.stringify(defaultSettings, null, 4));
-            } catch (e) {
-                log(`Failed to create config file: ${e.message}`, "error");
-            }
-            currentSettings = { ...defaultSettings };
-        } else {
-            try {
-                const configData = JSON.parse(fs.readFileSync(configPath, "utf8"));
-                // Ensure all default keys are present
-                currentSettings = { ...defaultSettings, ...configData };
-                log("Config file loaded successfully.", "info");
-            } catch (e) {
-                log(`Failed to read or parse config file: ${e.message}`, "error");
-                currentSettings = { ...defaultSettings };
-            }
+    // --- SETTINGS MANAGEMENT (via BdApi.Data) ---
+    const settings = new Proxy({}, {
+        get: (_target, key) => {
+            return BdApi.Data.load(meta.name, key) ?? getSetting(key)?.value;
+        },
+        set: (_target, key, value) => {
+            BdApi.Data.save(meta.name, key, value);
+            const setting = getSetting(key);
+            if (setting) setting.value = value;
+            return true;
         }
+    });
+
+    const initSettings = (settingsArray = pluginConfig.settings) => {
+        settingsArray.forEach(setting => {
+            if (setting.settings) {
+                initSettings(setting.settings);
+            } else if (setting.id) {
+                // This will trigger the proxy's 'get' to load the saved value or default
+                // and store it in the setting.value for the UI panel.
+                const value = settings[setting.id];
+                const settingObj = getSetting(setting.id);
+                if (settingObj) settingObj.value = value;
+            }
+        });
     };
 
 
@@ -139,12 +168,12 @@ function PPMChecker(meta) {
     const log = (message, type = "info") => {
         try {
             const method = console[type] && typeof console[type] === 'function' ? console[type] : console.log;
-            
+
             if (type === 'info' || type === 'warn' || type === 'error' || type === 'fatal') {
                 // Apply pink highlight for notice-level logs
                 method(`%c[${meta.name}]%c ${message}`, "color: #FF69B4; font-weight: bold;", "color: unset; font-weight: unset;");
             } else {
-                 method(`[${meta.name}] ${message}`);
+                method(`[${meta.name}] ${message}`);
             }
         } catch (e) {
             console.log(`[${meta.name} | Fallback Log] ${message}`);
@@ -159,30 +188,27 @@ function PPMChecker(meta) {
 
     /** A helper to create a delay. */
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    
+
     /**
      * Sends a plain text message notification to the configured channel.
      * @param {string} message The message content.
      */
-    const sendRestartNotification = (message) => {
-        // [FIX] Reverted to stable, simple checks.
-        if (!_sendMessage || !currentSettings.notificationChannelId) {
+    const sendNotification = (message) => {
+        if (!_sendMessage || !settings.notificationChannelId) {
             log("Cannot send notification: Send Message module unavailable or Notification Channel ID not set.", "warn");
             return;
         }
-        
+
         try {
-            // [FIX] Use the simple, stable message object
-            const messageData = { 
-                content: message, 
+            const messageData = {
+                content: message,
                 tts: false,
                 invalidEmojis: [],
                 validNonShortcutEmojis: []
             };
-            
-            // [FIX] Use the 4-argument call signature
-            _sendMessage(currentSettings.notificationChannelId, messageData, undefined, {});
-            log(`Sent restart notification to channel ${currentSettings.notificationChannelId}.`, "info");
+
+            _sendMessage(settings.notificationChannelId, messageData, undefined, {});
+            log(`Sent notification to channel ${settings.notificationChannelId}.`, "info");
         } catch (error) {
             log(`Error sending notification: ${error.message}`, "error");
         }
@@ -199,16 +225,16 @@ function PPMChecker(meta) {
         if (!_ppmResolve) return; // No active PPM check pending
 
         // Regex to find "PPM:" followed by optional whitespace and a number (including decimals).
-        const ppmRegex = /PPM:\s*(\d+(\.\d+)?)/i; 
+        const ppmRegex = /PPM:\s*(\d+(\.\d+)?)/i;
 
         const searchAndResolve = (text, source) => {
             if (!text) return false;
-            
+
             // 1. Check for critical offline message
             if (text.includes(CLUSTER_OFFLINE_STRING)) {
                 log(`Cluster Status CAPTURED (${source}): "${CLUSTER_OFFLINE_STRING}". Initiating /start.`, "warn");
                 _ppmResolve(CLUSTER_OFFLINE_MARKER); // Resolve promise with offline marker
-                _ppmResolve = null; 
+                _ppmResolve = null;
                 return true;
             }
 
@@ -222,13 +248,20 @@ function PPMChecker(meta) {
                 const icon = capturedValue > 0 ? "✅" : "❌";
 
                 // Use direct console.log with styling for reliability in patcher
-                console.log(`%c[${meta.name}]%c ${icon} PPM Value CAPTURED (%c${source}%c): ${match[0]}`, 
-                    `color: ${color}; font-weight: bold;`, 
+                console.log(`%c[${meta.name}]%c ${icon} PPM Value CAPTURED (%c${source}%c): ${match[0]}`,
+                    `color: ${color}; font-weight: bold;`,
                     "color: unset; font-weight: unset;",
                     "color: #1a73e8; font-weight: bold;",
                     "color: unset; font-weight: unset;"
                 );
                 
+                // --- VERBOSE LOGIC ---
+                if (settings.isVerbose && settings.notificationChannelId) {
+                    const verboseMessage = `${icon} PPM Value: **${match[0]}**`;
+                    sendNotification(verboseMessage); // Re-use the notification function
+                }
+                // --- END VERBOSE LOGIC ---
+
                 // Resolve the promise with the numerical value
                 _ppmResolve(capturedValue);
                 _ppmResolve = null; // Clear the resolver to prevent multiple triggers
@@ -239,7 +272,7 @@ function PPMChecker(meta) {
 
         // Check message.content
         if (searchAndResolve(message.content, "Content")) return;
-        
+
         // Check embeds
         if (message.embeds && message.embeds.length > 0) {
             for (const embed of message.embeds) {
@@ -266,10 +299,10 @@ function PPMChecker(meta) {
             // A check is already pending. Prevent race condition.
             return Promise.resolve("RACE_CONDITION");
         }
-        
+
         return new Promise(resolve => {
             _ppmResolve = resolve;
-            
+
             // Set up a timeout to handle cases where the bot doesn't respond
             setTimeout(() => {
                 if (_ppmResolve) {
@@ -283,7 +316,7 @@ function PPMChecker(meta) {
     /**
      * Finds and binds the internal Discord function for executing slash commands.
      */
-    const loadCommandExecutor = async () => { 
+    const loadCommandExecutor = async () => {
         try {
             log("Attempting to find Command Executor module...");
             const moduleFilter = (m) => {
@@ -310,7 +343,7 @@ function PPMChecker(meta) {
 
             const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true });
             if (!mod) throw new Error("Module filter failed to find anything.");
-            
+
             const target = mod.default ? mod.default : mod;
             const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
 
@@ -325,16 +358,16 @@ function PPMChecker(meta) {
             return null;
         }
     };
-    
+
     /**
      * Finds and patches the Discord Event Dispatcher (Webpack search only).
      */
-    const loadDispatcherPatch = async () => { 
+    const loadDispatcherPatch = async () => {
         try {
             log("Attempting to find Discord Event Dispatcher module...");
-            
+
             let dispatchModule = null;
-            
+
             // Webpack Search
             let mod = BdApi.Webpack.getModule(m => m.dispatch && m._events, { searchExports: true });
             if (!mod) mod = BdApi.Webpack.getModule(BdApi.Webpack.Filters.byProps("subscribe", "unsubscribe", "dispatch"));
@@ -343,9 +376,9 @@ function PPMChecker(meta) {
             if (!dispatchModule || typeof dispatchModule.dispatch !== 'function') {
                 throw new Error("Could not locate a usable Dispatcher module.");
             }
-            
+
             _dispatcher = dispatchModule;
-            
+
             // Patch the core dispatch function to intercept events
             BdApi.Patcher.after(meta.name, _dispatcher, "dispatch", (_, args) => {
                 const event = args[0]; // The first argument is the event object
@@ -353,11 +386,11 @@ function PPMChecker(meta) {
                 // Filter for MESSAGE_CREATE or MESSAGE_UPDATE events
                 if (event.type === 'MESSAGE_CREATE' || event.type === 'MESSAGE_UPDATE') {
                     // MESSAGE_CREATE uses 'message', MESSAGE_UPDATE sometimes uses 'data'
-                    const message = event.message || event.data; 
+                    const message = event.message || event.data;
 
                     // Filter 1: Ensure the message is in our target channel
                     if (message && message.channel_id === CONFIG.CHANNEL_ID) {
-                        
+
                         // Filter 2: Ensure the message is from the correct bot ID
                         if (message.author?.id === CONFIG.BOT_APPLICATION_ID) {
                             capturePPMValue(message);
@@ -365,14 +398,14 @@ function PPMChecker(meta) {
                     }
                 }
             });
-            
+
             log(`SUCCESS: Patched Discord Dispatcher to listen for MESSAGE_CREATE/UPDATE from the bot.`, "info");
-            
+
         } catch (error) {
             log(`Failed to patch Event Dispatcher (Critical): ${error.message}`, "error");
         }
     };
-    
+
     /**
      * [FIX] Finds Discord's simple internal sendMessage function.
      */
@@ -381,10 +414,10 @@ function PPMChecker(meta) {
             log("Attempting to find Send Message module (legacy)...");
             // [FIX] Use a simple, stable filter
             const mod = await BdApi.Webpack.waitForModule(BdApi.Webpack.Filters.byProps("sendMessage", "receiveMessage"));
-            
+
             _sendMessage = mod.sendMessage;
             if (!_sendMessage) throw new Error("Could not find sendMessage function.");
-            
+
             log(`SUCCESS: Found simple Send Message module.`, "info");
 
         } catch (error) {
@@ -414,7 +447,7 @@ function PPMChecker(meta) {
 
         // 3. OPTIONAL: Load Send Message module
         await loadSendMessageModule();
-        
+
         // 4. [REMOVED] Nonce generator loader
 
         return true;
@@ -541,10 +574,10 @@ function PPMChecker(meta) {
             log("Modules loaded. Proceeding to run scheduler.", "info");
 
             // Send test notification on first run if configured
-            if (currentSettings.notificationChannelId) {
+            if (settings.notificationChannelId) {
                 log("First run: Sending test notification to configured channel.", "info");
                 const testMessage = `✅ **PPMChecker Plugin (v${meta.version})**\n\nThe plugin has successfully loaded and is now monitoring PPM. Notifications are working.`;
-                sendRestartNotification(testMessage); // Use the existing notification function
+                sendNotification(testMessage); // Use the existing notification function
             }
             // End test notification
         }
@@ -557,20 +590,20 @@ function PPMChecker(meta) {
         log("Scheduler running PPM check sequence...", "info");
 
         // 1. Execute /clear only if enabled
-        if (currentSettings.sendClearCommand) {
+        if (settings.sendClearCommand) {
             await executeSlashCommand(CLEAR_COMMAND, {}); // Pass empty option values
 
             // 2. Wait 10 seconds
             log(`Waiting ${CONFIG.CLEAR_DELAY_MS / 1000} seconds before running /ppm...`, "info");
             await wait(CONFIG.CLEAR_DELAY_MS);
         } else {
-            log("Skipping /clear command as per config.", "info");
+            log("Skipping /clear command as per settings.", "info");
         }
 
 
         // 3. Execute the PPM check command
         await executeSlashCommand(PPM_COMMAND, {});
-        
+
         // 4. Wait for the result or timeout
         const ppmResult = await waitForPPMResult();
 
@@ -581,44 +614,44 @@ function PPMChecker(meta) {
                 // PPM is healthy. Do nothing.
             } else if (ppmResult === 0) {
                 log(`PPM check complete: Value is 0. Initiating 6-minute restart sequence.`, "warn");
-                
+
                 const notificationMessage = `⚠️ **PPMChecker Alert!** ⚠️\n\nPPM value was **0**. Cluster being stopped now, restarting in ${CONFIG.RELOAD_DELAY_MS / 60000} minutes.`;
-                sendRestartNotification(notificationMessage);
+                sendNotification(notificationMessage);
 
                 // Restart Sequence Step 1: Stop
                 await executeSlashCommand(STOP_COMMAND);
-                
+
                 // Restart Sequence Step 2: Wait
                 log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} minutes before executing /start...`, "warn");
                 await wait(CONFIG.RELOAD_DELAY_MS);
-                
+
                 // Restart Sequence Step 3: Start
                 await executeSlashCommand(START_COMMAND);
-                
+
                 log("Restart sequence complete.", "info");
             }
         } else if (ppmResult === CLUSTER_OFFLINE_MARKER) {
             // --- Case 2: CLUSTER OFFLINE DETECTED ---
             log(`Cluster reported as not started. Initiating /start command immediately.`, "warn");
-            
+
             const notificationMessage = `❌ **PPMChecker Alert!** ❌\n\nCluster reported as **"${CLUSTER_OFFLINE_STRING}"**. Attempting immediate /start.`;
-            sendRestartNotification(notificationMessage);
+            sendNotification(notificationMessage);
 
             await executeSlashCommand(START_COMMAND);
 
         } else if (ppmResult === "TIMEOUT") {
             // --- Case 3: PPM NOT FOUND/TIMEOUT ---
             log(`PPM check timed out (${CONFIG.PPM_TIMEOUT_MS / 1000}s). PPM value could not be found. Initiating /start command.`, "error");
-            
+
             const notificationMessage = `⏱️ **PPMChecker Alert!** ⏱️\n\nPPM check timed out. Attempting immediate /start.`;
-            sendRestartNotification(notificationMessage);
+            sendNotification(notificationMessage);
 
             // Attempt to start the cluster
             await executeSlashCommand(START_COMMAND);
         } else if (ppmResult === "RACE_CONDITION") {
             log("Skipping PPM check: Concurrent schedule detected.", "warn");
         }
-        
+
         log("Command sequence finished.", "info");
     };
 
@@ -628,17 +661,17 @@ function PPMChecker(meta) {
         start: () => {
             // Set meta name for logging
             meta.name = "PPMChecker";
-            loadConfig(); // Load config.json
+            initSettings(); // Load settings from BdApi.Data
             log(`Plugin started (v${meta.version}).`, "info");
-            
-            // Log config file status
-            if (!currentSettings.notificationChannelId) {
-                log("Notification Channel ID is not set in PPMChecker.config.json. Notifications will be disabled.", "warn");
+
+            // Log settings status
+            if (!settings.notificationChannelId) {
+                log("Notification Channel ID is not set in plugin settings. Notifications will be disabled.", "warn");
             } else {
-                log(`Notifications will be sent to channel: ${currentSettings.notificationChannelId}`, "info");
+                log(`Notifications will be sent to channel: ${settings.notificationChannelId}`, "info");
             }
-            // Log new config setting
-            log(`Send /clear command is set to: ${currentSettings.sendClearCommand}`, "info");
+            log(`Send /clear command is set to: ${settings.sendClearCommand}`, "info");
+            log(`Verbose Logging is set to: ${settings.isVerbose}`, "info");
 
 
             if (CONFIG.BOT_APPLICATION_ID === "PASTE_YOUR_BOTS_CLIENT_ID_HERE") {
@@ -664,23 +697,38 @@ function PPMChecker(meta) {
             }
             // Unpatch all modules
             if (_dispatcher) {
-                 BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
+                BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
             }
             if (_ppmResolve) {
                 _ppmResolve("STOPPED"); // Clear any pending promise resolvers
             }
             BdApi.Patcher.unpatchAll(meta.name);
-            
+
             // Clear module references
             _executeCommand = null;
             _dispatcher = null;
-            _sendMessage = null; 
+            _sendMessage = null;
             _ppmResolve = null;
             _modulesLoaded = false;
             log("Plugin stopped. Interval cleared and dispatcher patch removed.", "info");
             showToast("PPMChecker stopped.", "info");
         },
-        
+
+        // --- Settings Panel ---
+        getSettingsPanel: () => {
+            // Manually update the 'value' in pluginConfig from the proxy
+            // This ensures the panel shows the *saved* value, not the default
+            initSettings();
+
+            return BdApi.UI.buildSettingsPanel({
+                settings: pluginConfig.settings,
+                onChange: (category, id, value) => {
+                    // This will trigger the proxy's 'set' to save the new value
+                    settings[id] = value;
+                }
+            });
+        },
+
         // --- API Methods for Manual Execution ---
 
         /**
@@ -690,7 +738,7 @@ function PPMChecker(meta) {
          */
         RunPPMCheck: async () => {
             log("Manual execution requested for PPM check and reload logic.", "info");
-             if (!_modulesLoaded) {
+            if (!_modulesLoaded) {
                 log("Modules not loaded. Attempting to load...", "info");
                 const success = await loadModules();
                 if (!success) {
@@ -720,7 +768,7 @@ function PPMChecker(meta) {
             }
             await executeSlashCommand(STOP_COMMAND);
         },
-        
+
         /**
          * @name SendStartCommand
          * @description Manually sends the /start command to the channel.

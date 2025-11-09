@@ -1,4 +1,6 @@
 {
     "notificationChannelId": ""
     "sendClearCommand": true
+	"isVerbose": false
+
 }
