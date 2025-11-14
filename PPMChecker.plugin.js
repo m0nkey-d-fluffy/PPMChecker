@@ -1,8 +1,8 @@
 /**
  * @name PPMChecker
  * @author m0nkey.d.fluffy
- * @description Automatically runs /clear then /ppm every 15 mins, monitors the response, and restarts the cluster if PPM is 0.
- * @version 1.0.4
+ * @description Automatically runs /ppm, filters for YOUR specific user ID in the response, and restarts if YOUR PPM is 0.
+ * @version 1.0.5
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -41,7 +41,7 @@ const pluginConfig = {
             type: "switch",
             id: "sendClearCommand",
             name: "Send /clear command",
-            note: "Whether to run /clear before /ppm. (Default: true)",
+            note: "CURRENTLY DISABLED IN CODE. (Default: true)",
             value: true
         },
         {
@@ -81,7 +81,7 @@ function PPMChecker(meta) {
     const CLUSTER_OFFLINE_STRING = "Cluster not started";
     const CLUSTER_OFFLINE_MARKER = "CLUSTER_OFFLINE_MARKER";
 
-    // --- COMMAND DATA: Extracted from V17 Payloads ---
+    // --- COMMAND DATA ---
 
     const CLEAR_COMMAND = {
         name: "clear",
@@ -89,14 +89,7 @@ function PPMChecker(meta) {
         commandVersion: "1433501849713115315",
         description: "Clear your friends list (Keep your GP friends and Favs)",
         rank: 3,
-        options: [ // Command options
-            {
-                "type": 5,
-                "name": "force-remove-all",
-                "description": "If true, removes all friends - keep only favs",
-                "required": false
-            }
-        ]
+        options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }]
     };
 
     const PPM_COMMAND = {
@@ -130,11 +123,12 @@ function PPMChecker(meta) {
     let interval = null;
     let _executeCommand = null;
     let _dispatcher = null;
-    let _sendMessage = null; // For sending notifications
+    let _sendMessage = null; 
     let _modulesLoaded = false;
-    let _ppmResolve = null; // Function to resolve the current PPM check Promise
+    let _ppmResolve = null;
+    let _currentUserId = null; // Store user ID here
 
-    // --- SETTINGS MANAGEMENT (via BdApi.Data) ---
+    // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
         get: (_target, key) => {
             return BdApi.Data.load(meta.name, key) ?? getSetting(key)?.value;
@@ -152,8 +146,6 @@ function PPMChecker(meta) {
             if (setting.settings) {
                 initSettings(setting.settings);
             } else if (setting.id) {
-                // This will trigger the proxy's 'get' to load the saved value or default
-                // and store it in the setting.value for the UI panel.
                 const value = settings[setting.id];
                 const settingObj = getSetting(setting.id);
                 if (settingObj) settingObj.value = value;
@@ -164,13 +156,10 @@ function PPMChecker(meta) {
 
     // --- UTILITIES ---
 
-    /** A helper to safely log messages with custom styling. */
     const log = (message, type = "info") => {
         try {
             const method = console[type] && typeof console[type] === 'function' ? console[type] : console.log;
-
             if (type === 'info' || type === 'warn' || type === 'error' || type === 'fatal') {
-                // Apply pink highlight for notice-level logs
                 method(`%c[${meta.name}]%c ${message}`, "color: #FF69B4; font-weight: bold;", "color: unset; font-weight: unset;");
             } else {
                 method(`[${meta.name}] ${message}`);
@@ -180,33 +169,20 @@ function PPMChecker(meta) {
         }
     };
 
-    /** A helper to show a toast notification. */
     const showToast = (message, type = "info") => {
         if (window.BdApi && BdApi.showToast) BdApi.showToast(message, { type });
         else log(`TOAST: ${message}`, type);
     };
 
-    /** A helper to create a delay. */
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    /**
-     * Sends a plain text message notification to the configured channel.
-     * @param {string} message The message content.
-     */
     const sendNotification = (message) => {
         if (!_sendMessage || !settings.notificationChannelId) {
             log("Cannot send notification: Send Message module unavailable or Notification Channel ID not set.", "warn");
             return;
         }
-
         try {
-            const messageData = {
-                content: message,
-                tts: false,
-                invalidEmojis: [],
-                validNonShortcutEmojis: []
-            };
-
+            const messageData = { content: message, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] };
             _sendMessage(settings.notificationChannelId, messageData, undefined, {});
             log(`Sent notification to channel ${settings.notificationChannelId}.`, "info");
         } catch (error) {
@@ -215,56 +191,67 @@ function PPMChecker(meta) {
     };
 
 
-    // --- MESSAGE LISTENER LOGIC (Integrated into Dispatcher) ---
+    // --- MESSAGE LISTENER LOGIC ---
 
     /**
-     * Searches message content and embeds for the PPM value or critical status messages.
-     * @param {object} message The message object from the dispatcher.
+     * Searches message content and embeds for YOUR SPECIFIC PPM value.
      */
     const capturePPMValue = (message) => {
         if (!_ppmResolve) return; // No active PPM check pending
 
-        // Regex to find "PPM:" followed by optional whitespace and a number (including decimals).
-        const ppmRegex = /PPM:\s*(\d+(\.\d+)?)/i;
+        // Ensure we know who "WE" are
+        if (!_currentUserId) {
+            log("Cannot parse PPM: Current User ID not yet loaded.", "error");
+            return;
+        }
+
+        // -----------------------------------------------------------------------
+        // TARGETED REGEX
+        // Matches: <@YOUR_ID> ... anything ... 🎁 **NUMBER**
+        // This ignores lines belonging to other people.
+        // -----------------------------------------------------------------------
+        // We allow <@ID> or <@!ID> (nickname format)
+        const myPpmRegex = new RegExp(`<@!?${_currentUserId}>.*?🎁\\s*\\*\\*(\\d+(?:\\.\\d+)?)\\*\\*`, "s");
 
         const searchAndResolve = (text, source) => {
             if (!text) return false;
 
-            // 1. Check for critical offline message
+            // 1. Check for global offline text
             if (text.includes(CLUSTER_OFFLINE_STRING)) {
                 log(`Cluster Status CAPTURED (${source}): "${CLUSTER_OFFLINE_STRING}". Initiating /start.`, "warn");
-                _ppmResolve(CLUSTER_OFFLINE_MARKER); // Resolve promise with offline marker
+                _ppmResolve(CLUSTER_OFFLINE_MARKER); 
                 _ppmResolve = null;
                 return true;
             }
 
-            // 2. Check for PPM value
-            const match = text.match(ppmRegex);
+            // 2. Search for MY specific entry
+            const match = text.match(myPpmRegex);
+            
             if (match) {
-                const capturedValue = parseFloat(match[1]);
+                const myValue = parseFloat(match[1]); // The captured number
 
-                // Conditional logging based on value
-                const color = capturedValue > 0 ? "#4CAF50" : "#FF0000";
-                const icon = capturedValue > 0 ? "✅" : "❌";
+                // Conditional logging
+                const color = myValue > 0 ? "#4CAF50" : "#FF0000";
+                const icon = myValue > 0 ? "✅" : "❌";
 
-                // Use direct console.log with styling for reliability in patcher
-                console.log(`%c[${meta.name}]%c ${icon} PPM Value CAPTURED (%c${source}%c): ${match[0]}`,
+                // Log finding
+                console.log(`%c[${meta.name}]%c ${icon} FOUND MY PPM (%c${source}%c): ${myValue}`,
                     `color: ${color}; font-weight: bold;`,
                     "color: unset; font-weight: unset;",
                     "color: #1a73e8; font-weight: bold;",
                     "color: unset; font-weight: unset;"
                 );
-                
+
                 // --- VERBOSE LOGIC ---
                 if (settings.isVerbose && settings.notificationChannelId) {
-                    const verboseMessage = `${icon} PPM Value: **${match[0]}**`;
-                    sendNotification(verboseMessage); // Re-use the notification function
+                    const verboseMessage = `${icon} My PPM: **${myValue}**`;
+                    sendNotification(verboseMessage); 
                 }
                 // --- END VERBOSE LOGIC ---
 
-                // Resolve the promise with the numerical value
-                _ppmResolve(capturedValue);
-                _ppmResolve = null; // Clear the resolver to prevent multiple triggers
+                // Resolve
+                _ppmResolve(myValue);
+                _ppmResolve = null;
                 return true;
             }
             return false;
@@ -276,210 +263,163 @@ function PPMChecker(meta) {
         // Check embeds
         if (message.embeds && message.embeds.length > 0) {
             for (const embed of message.embeds) {
-                // Check description
                 if (searchAndResolve(embed.description, "Embed Description")) return;
+                if (searchAndResolve(embed.title, "Embed Title")) return;
 
-                // Check fields (Name and Value)
                 if (embed.fields && embed.fields.length > 0) {
                     for (const field of embed.fields) {
-                        if (searchAndResolve(field.name, "Embed Field Name")) return;
-                        if (searchAndResolve(field.value, "Embed Field Value")) return;
+                        // Check Field Value (This is where "Members" list usually is)
+                        if (searchAndResolve(field.value, `Field: ${field.name}`)) return;
                     }
                 }
             }
         }
     };
 
-    /**
-     * Creates a promise that resolves when PPM value is captured or times out.
-     * @returns {Promise<number|string>} PPM value, "TIMEOUT", or CLUSTER_OFFLINE_MARKER
-     */
     const waitForPPMResult = () => {
-        if (_ppmResolve) {
-            // A check is already pending. Prevent race condition.
-            return Promise.resolve("RACE_CONDITION");
-        }
+        if (_ppmResolve) return Promise.resolve("RACE_CONDITION");
 
         return new Promise(resolve => {
             _ppmResolve = resolve;
-
-            // Set up a timeout to handle cases where the bot doesn't respond
             setTimeout(() => {
                 if (_ppmResolve) {
                     _ppmResolve("TIMEOUT");
-                    _ppmResolve = null; // Clear the resolver on timeout
+                    _ppmResolve = null;
                 }
             }, CONFIG.PPM_TIMEOUT_MS);
         });
     };
 
+    // --- INTERNAL MODULE LOADERS ---
+
     /**
-     * Finds and binds the internal Discord function for executing slash commands.
+     * Gets the current user ID so we know which line to read.
      */
+    const loadUserIdentity = () => {
+        try {
+            const userStore = BdApi.Webpack.getModule(BdApi.Webpack.Filters.byProps("getCurrentUser", "getUser"));
+            if (userStore) {
+                const user = userStore.getCurrentUser();
+                if (user) {
+                    _currentUserId = user.id;
+                    log(`Identified current user as ID: ${_currentUserId}`, "info");
+                    return true;
+                }
+            }
+            throw new Error("Could not fetch CurrentUser from store.");
+        } catch (e) {
+            log(`Failed to identify current user: ${e.message}`, "error");
+            return false;
+        }
+    };
+
     const loadCommandExecutor = async () => {
         try {
             log("Attempting to find Command Executor module...");
+            // Standard filter for the interaction function
             const moduleFilter = (m) => {
                 const target = m.default ? m.default : m;
                 if (!target || typeof target !== 'object') return false;
                 return Object.keys(target).some(k => {
                     try {
                         const funcString = target[k].toString().toLowerCase();
-                        return typeof target[k] === 'function' &&
-                            funcString.includes("commandorigin") &&
-                            funcString.includes("optionvalues");
+                        return typeof target[k] === 'function' && funcString.includes("commandorigin") && funcString.includes("optionvalues");
                     } catch (e) { return false; }
                 });
             };
 
-            const keyFinder = (target, k) => {
+            const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true });
+            if (!mod) throw new Error("Module filter failed.");
+            
+            const target = mod.default ? mod.default : mod;
+            // Helper to find the specific key
+            const keyFinder = (t, k) => {
                 try {
-                    const funcString = target[k].toString().toLowerCase();
-                    return typeof target[k] === 'function' &&
-                        funcString.includes("commandorigin") &&
-                        funcString.includes("optionvalues");
+                    const s = t[k].toString().toLowerCase();
+                    return typeof t[k] === 'function' && s.includes("commandorigin") && s.includes("optionvalues");
                 } catch (e) { return false; }
             };
-
-            const mod = await BdApi.Webpack.waitForModule(moduleFilter, { first: true });
-            if (!mod) throw new Error("Module filter failed to find anything.");
-
-            const target = mod.default ? mod.default : mod;
+            
             const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
 
-            if (funcKey && typeof target[funcKey] === 'function') {
-                log(`SUCCESS: Found Command Executor function: '${funcKey}'`);
-                return target[funcKey].bind(target);
-            } else {
-                throw new Error("Found module, but could not locate the execution function inside.");
-            }
+            if (funcKey) return target[funcKey].bind(target);
+            else throw new Error("Function key not found.");
         } catch (e) {
             log(`Fatal Error loading Command Executor: ${e.message}`, "error");
             return null;
         }
     };
 
-    /**
-     * Finds and patches the Discord Event Dispatcher (Webpack search only).
-     */
     const loadDispatcherPatch = async () => {
         try {
-            log("Attempting to find Discord Event Dispatcher module...");
-
-            let dispatchModule = null;
-
-            // Webpack Search
             let mod = BdApi.Webpack.getModule(m => m.dispatch && m._events, { searchExports: true });
             if (!mod) mod = BdApi.Webpack.getModule(BdApi.Webpack.Filters.byProps("subscribe", "unsubscribe", "dispatch"));
-            dispatchModule = mod.dispatch ? mod : (mod.default ? mod.default : mod);
+            const dispatchModule = mod.dispatch ? mod : (mod.default ? mod.default : mod);
 
-            if (!dispatchModule || typeof dispatchModule.dispatch !== 'function') {
-                throw new Error("Could not locate a usable Dispatcher module.");
-            }
-
+            if (!dispatchModule) throw new Error("No Dispatcher found.");
             _dispatcher = dispatchModule;
 
-            // Patch the core dispatch function to intercept events
             BdApi.Patcher.after(meta.name, _dispatcher, "dispatch", (_, args) => {
-                const event = args[0]; // The first argument is the event object
-
-                // Filter for MESSAGE_CREATE or MESSAGE_UPDATE events
+                const event = args[0]; 
                 if (event.type === 'MESSAGE_CREATE' || event.type === 'MESSAGE_UPDATE') {
-                    // MESSAGE_CREATE uses 'message', MESSAGE_UPDATE sometimes uses 'data'
                     const message = event.message || event.data;
-
-                    // Filter 1: Ensure the message is in our target channel
                     if (message && message.channel_id === CONFIG.CHANNEL_ID) {
-
-                        // Filter 2: Ensure the message is from the correct bot ID
                         if (message.author?.id === CONFIG.BOT_APPLICATION_ID) {
                             capturePPMValue(message);
                         }
                     }
                 }
             });
-
-            log(`SUCCESS: Patched Discord Dispatcher to listen for MESSAGE_CREATE/UPDATE from the bot.`, "info");
-
+            log(`SUCCESS: Patched Discord Dispatcher.`, "info");
         } catch (error) {
-            log(`Failed to patch Event Dispatcher (Critical): ${error.message}`, "error");
+            log(`Failed to patch Event Dispatcher: ${error.message}`, "error");
         }
     };
 
-    /**
-     * [FIX] Finds Discord's simple internal sendMessage function.
-     */
     const loadSendMessageModule = async () => {
         try {
-            log("Attempting to find Send Message module (legacy)...");
-            // [FIX] Use a simple, stable filter
             const mod = await BdApi.Webpack.waitForModule(BdApi.Webpack.Filters.byProps("sendMessage", "receiveMessage"));
-
             _sendMessage = mod.sendMessage;
-            if (!_sendMessage) throw new Error("Could not find sendMessage function.");
-
-            log(`SUCCESS: Found simple Send Message module.`, "info");
-
         } catch (error) {
-            log(`Failed to load Send Message module: ${error.message}`, "error");
-            _sendMessage = null;
+            log(`Failed to load Send Message module`, "error");
         }
     };
 
-    /**
-     * [REMOVED] loadNonceGenerator
-     */
-
-    /**
-     * Orchestrates loading all modules.
-     * @returns {Promise<boolean>} True if the critical module was successful.
-     */
     const loadModules = async () => {
-        // 1. CRITICAL: Load command executor
+        // Load identity first
+        loadUserIdentity();
+        
         _executeCommand = await loadCommandExecutor();
         if (!_executeCommand) {
-            log("Critical Command Executor failed to load. Plugin cannot run commands.", "fatal");
+            log("Critical Command Executor failed to load.", "fatal");
             return false;
         }
-
-        // 2. OPTIONAL: Load Dispatcher Patch
         await loadDispatcherPatch();
-
-        // 3. OPTIONAL: Load Send Message module
         await loadSendMessageModule();
-
-        // 4. [REMOVED] Nonce generator loader
-
         return true;
     };
 
 
     // --- EXECUTION LOGIC ---
 
-    /**
-     * Executes a slash command using the internal Discord API function.
-     * @param {object} command The command object.
-     * @param {object} [optionValues={}] Key/value pairs for options
-     */
     const executeSlashCommand = async (command, optionValues = {}) => {
         if (!_executeCommand) {
-            log("Command Executor module is not loaded. Cannot execute command.", "error");
+            log("Command Executor unavailable.", "error");
             return;
         }
 
         const name = command.name;
-        log(`Attempting to execute SLIDE COMMAND: "/${name}" to channel ID ${CONFIG.CHANNEL_ID}`, "info");
+        log(`Executing COMMAND: "/${name}"`, "info");
 
         try {
-            // Rebuild the required command/context objects
             const realCommand = {
                 id: command.commandId,
                 version: command.commandVersion,
-                type: 1, // CHAT_INPUT
-                inputType: 3, // CHAT
+                type: 1, 
+                inputType: 3, 
                 name: name,
                 applicationId: CONFIG.BOT_APPLICATION_ID,
-                options: command.options || [], // Use command's defined options
+                options: command.options || [],
                 dmPermission: true,
                 integration_types: [0, 1],
                 displayDescription: command.description,
@@ -514,277 +454,133 @@ function PPMChecker(meta) {
                         icon: "17d39a9b7ea9ce8ed69a57eb99f6f37f",
                         id: CONFIG.BOT_APPLICATION_ID,
                         name: "Drenass",
-                        bot: {
-                            id: CONFIG.BOT_APPLICATION_ID,
-                            username: "Dreama",
-                            discriminator: "5958",
-                            avatar: "17d39a9b7ea9ce8ed69a57eb99f6f37f",
-                            bot: true,
-                        }
+                        bot: { id: CONFIG.BOT_APPLICATION_ID, username: "Dreama", discriminator: "5958", avatar: "17d39a9b7ea9ce8ed69a57eb99f6f37f", bot: true }
                     }
                 }
             };
 
-            const mockChannel = {
-                id: CONFIG.CHANNEL_ID,
-                guild_id: CONFIG.GUILD_ID,
-                type: 0, // GUILD_TEXT
-            };
+            const mockChannel = { id: CONFIG.CHANNEL_ID, guild_id: CONFIG.GUILD_ID, type: 0 };
+            const mockGuild = { id: CONFIG.GUILD_ID, name: "MP - VIP" };
 
-            const mockGuild = {
-                id: CONFIG.GUILD_ID,
-                name: "MP - VIP"
-            };
-
-            // Call the internal Discord function with the required arguments
             await _executeCommand({
                 command: realCommand,
-                optionValues: optionValues, // Pass the populated option values
-                context: {
-                    channel: mockChannel,
-                    guild: mockGuild
-                },
-                commandOrigin: 1, // 1 = CHAT
+                optionValues: optionValues,
+                context: { channel: mockChannel, guild: mockGuild },
+                commandOrigin: 1, 
                 commandTargetId: null
             });
-
-            log(`Command "/${name}" successfully executed (API call sent).`, "info");
-            showToast(`Command "/${name}" sent.`, "success");
-
+            
         } catch (error) {
-            log(`Error executing command "/${name}": ${error.message}`, "error");
-            console.error("Full error object:", error);
-            showToast(`Command Failed: Check console for details.`, "error");
+            log(`Error executing "/${name}": ${error.message}`, "error");
         }
     };
 
-    /** The main scheduler loop that runs every 30 minutes, handling conditional restarts. */
     const runScheduler = async () => {
-        // Load modules only once on the very first run
         if (!_modulesLoaded) {
-            log("First run: Loading internal modules...", "info");
+            log("First run: Loading modules...", "info");
             const success = await loadModules();
             if (!success) {
-                log("Module load failed. Stopping scheduler interval.", "error");
                 if (interval) clearInterval(interval);
                 interval = null;
                 return;
             }
             _modulesLoaded = true;
-            log("Modules loaded. Proceeding to run scheduler.", "info");
-
-            // Send test notification on first run if configured
             if (settings.notificationChannelId) {
-                log("First run: Sending test notification to configured channel.", "info");
-                const testMessage = `✅ **PPMChecker Plugin (v${meta.version})**\n\nThe plugin has successfully loaded and is now monitoring PPM. Notifications are working.`;
-                sendNotification(testMessage); // Use the existing notification function
+                sendNotification(`✅ **PPMChecker (v${meta.version})** Started. Monitoring for user ID: ${_currentUserId}`);
             }
-            // End test notification
         }
 
-        if (!_executeCommand) {
-            log("Command executor is unavailable. Cannot run PPM check.", "error");
-            return;
-        }
+        if (!_executeCommand) return;
 
-        log("Scheduler running PPM check sequence...", "info");
+        log("Scheduler running check...", "info");
 
-        // 1. Execute /clear only if enabled
+        // /clear is DISABLED
+        /*
         if (settings.sendClearCommand) {
-            await executeSlashCommand(CLEAR_COMMAND, {}); // Pass empty option values
-
-            // 2. Wait 10 seconds
-            log(`Waiting ${CONFIG.CLEAR_DELAY_MS / 1000} seconds before running /ppm...`, "info");
+            await executeSlashCommand(CLEAR_COMMAND, {}); 
             await wait(CONFIG.CLEAR_DELAY_MS);
-        } else {
-            log("Skipping /clear command as per settings.", "info");
         }
+        */
 
-
-        // 3. Execute the PPM check command
         await executeSlashCommand(PPM_COMMAND, {});
-
-        // 4. Wait for the result or timeout
         const ppmResult = await waitForPPMResult();
 
         if (typeof ppmResult === 'number') {
-            // --- Case 1: PPM VALUE CAPTURED (0 or > 0) ---
             if (ppmResult > 0) {
-                log(`PPM check complete: Value > 0 (${ppmResult}). No action needed.`, "info");
-                // PPM is healthy. Do nothing.
+                log(`My PPM is Healthy (> 0): ${ppmResult}.`, "info");
             } else if (ppmResult === 0) {
-                log(`PPM check complete: Value is 0. Initiating 6-minute restart sequence.`, "warn");
-
-                const notificationMessage = `⚠️ **PPMChecker Alert!** ⚠️\n\nPPM value was **0**. Cluster being stopped now, restarting in ${CONFIG.RELOAD_DELAY_MS / 60000} minutes.`;
-                sendNotification(notificationMessage);
-
-                // Restart Sequence Step 1: Stop
+                log(`My PPM is 0. Initiating Restart.`, "warn");
+                sendNotification(`⚠️ **PPMChecker Alert!** ⚠️\n\nYOUR PPM is **0**. Restarting cluster in ${CONFIG.RELOAD_DELAY_MS / 60000} mins.`);
+                
                 await executeSlashCommand(STOP_COMMAND);
-
-                // Restart Sequence Step 2: Wait
-                log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} minutes before executing /start...`, "warn");
+                log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
                 await wait(CONFIG.RELOAD_DELAY_MS);
-
-                // Restart Sequence Step 3: Start
                 await executeSlashCommand(START_COMMAND);
-
-                log("Restart sequence complete.", "info");
+                log("Restart complete.", "info");
             }
         } else if (ppmResult === CLUSTER_OFFLINE_MARKER) {
-            // --- Case 2: CLUSTER OFFLINE DETECTED ---
-            log(`Cluster reported as not started. Initiating /start command immediately.`, "warn");
-
-            const notificationMessage = `❌ **PPMChecker Alert!** ❌\n\nCluster reported as **"${CLUSTER_OFFLINE_STRING}"**. Attempting immediate /start.`;
-            sendNotification(notificationMessage);
-
+            log(`Cluster offline. Restarting.`, "warn");
+            sendNotification(`❌ **PPMChecker Alert!** ❌\n\nCluster "Not Started". Sending /start.`);
             await executeSlashCommand(START_COMMAND);
 
         } else if (ppmResult === "TIMEOUT") {
-            // --- Case 3: PPM NOT FOUND/TIMEOUT ---
-            log(`PPM check timed out (${CONFIG.PPM_TIMEOUT_MS / 1000}s). PPM value could not be found. Initiating /start command.`, "error");
-
-            const notificationMessage = `⏱️ **PPMChecker Alert!** ⏱️\n\nPPM check timed out. Attempting immediate /start.`;
-            sendNotification(notificationMessage);
-
-            // Attempt to start the cluster
-            await executeSlashCommand(START_COMMAND);
+            // If we timed out, it means either the bot didn't reply OR we weren't in the list
+            // We should NOT restart blindly here to avoid loops if we are just missing from the list.
+            // However, if the bot didn't reply at all, we might want to start. 
+            // For safety in this version: we assume timeout = bot lag or user not found = DO NOTHING.
+            log(`PPM check timed out (or User ID not found in list). Taking NO action to be safe.`, "error");
+            sendNotification(`❓ **PPMChecker Warning**\n\nPPM check timed out or your ID was not found in the response.`);
+            
         } else if (ppmResult === "RACE_CONDITION") {
-            log("Skipping PPM check: Concurrent schedule detected.", "warn");
+            log("Skipping concurrent check.", "warn");
         }
 
-        log("Command sequence finished.", "info");
+        log("Sequence finished.", "info");
     };
-
-    // --- Plugin API Methods ---
 
     return {
         start: () => {
-            // Set meta name for logging
             meta.name = "PPMChecker";
-            initSettings(); // Load settings from BdApi.Data
+            initSettings();
             log(`Plugin started (v${meta.version}).`, "info");
-
-            // Log settings status
-            if (!settings.notificationChannelId) {
-                log("Notification Channel ID is not set in plugin settings. Notifications will be disabled.", "warn");
-            } else {
-                log(`Notifications will be sent to channel: ${settings.notificationChannelId}`, "info");
-            }
-            log(`Send /clear command is set to: ${settings.sendClearCommand}`, "info");
-            log(`Verbose Logging is set to: ${settings.isVerbose}`, "info");
-
-
             if (CONFIG.BOT_APPLICATION_ID === "PASTE_YOUR_BOTS_CLIENT_ID_HERE") {
-                const msg = "Configuration Error: BOT_APPLICATION_ID is not set! Plugin will not run.";
-                log(msg, "error");
-                showToast(msg, "error");
+                showToast("Config Error: BOT_APPLICATION_ID not set!", "error");
                 return;
             }
-
-            // Run immediately on start
             runScheduler();
-
-            // Set the recurring interval
             interval = setInterval(runScheduler, CONFIG.INTERVAL_MS);
-            log(`Scheduler set to run every ${CONFIG.INTERVAL_MS / 60000} minute(s).`, "info");
-            showToast(`PPMChecker started! Next run in ${CONFIG.INTERVAL_MS / 60000} min.`, "success");
+            showToast(`PPMChecker started!`, "success");
         },
-
         stop: () => {
-            if (interval) {
-                clearInterval(interval);
-                interval = null;
-            }
-            // Unpatch all modules
-            if (_dispatcher) {
-                BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
-            }
-            if (_ppmResolve) {
-                _ppmResolve("STOPPED"); // Clear any pending promise resolvers
-            }
+            if (interval) { clearInterval(interval); interval = null; }
+            if (_dispatcher) BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
+            if (_ppmResolve) _ppmResolve("STOPPED");
             BdApi.Patcher.unpatchAll(meta.name);
-
-            // Clear module references
             _executeCommand = null;
             _dispatcher = null;
             _sendMessage = null;
             _ppmResolve = null;
             _modulesLoaded = false;
-            log("Plugin stopped. Interval cleared and dispatcher patch removed.", "info");
+            log("Stopped.", "info");
             showToast("PPMChecker stopped.", "info");
         },
-
-        // --- Settings Panel ---
         getSettingsPanel: () => {
-            // Manually update the 'value' in pluginConfig from the proxy
-            // This ensures the panel shows the *saved* value, not the default
             initSettings();
-
             return BdApi.UI.buildSettingsPanel({
                 settings: pluginConfig.settings,
-                onChange: (category, id, value) => {
-                    // This will trigger the proxy's 'set' to save the new value
-                    settings[id] = value;
-                }
+                onChange: (category, id, value) => { settings[id] = value; }
             });
         },
-
-        // --- API Methods for Manual Execution ---
-
-        /**
-         * @name RunPPMCheck
-         * @description Manually executes the full PPM check and conditional restart logic.
-         * @returns {void}
-         */
         RunPPMCheck: async () => {
-            log("Manual execution requested for PPM check and reload logic.", "info");
-            if (!_modulesLoaded) {
-                log("Modules not loaded. Attempting to load...", "info");
-                const success = await loadModules();
-                if (!success) {
-                    showToast("Failed to load modules. Cannot run check.", "error");
-                    return;
-                }
-                _modulesLoaded = true;
-            }
+            if (!_modulesLoaded) { await loadModules(); _modulesLoaded = true; }
             await runScheduler();
         },
-
-        /**
-         * @name SendStopCommand
-         * @description Manually sends the /stop command to the channel.
-         * @returns {void}
-         */
         SendStopCommand: async () => {
-            log("Manual execution requested for /stop command.", "info");
-            if (!_modulesLoaded) {
-                log("Modules not loaded. Attempting to load...", "info");
-                _executeCommand = await loadCommandExecutor();
-                if (!_executeCommand) {
-                    showToast("Failed to load Command Executor. Cannot send /stop.", "error");
-                    return;
-                }
-                _modulesLoaded = true;
-            }
+            if (!_modulesLoaded) { await loadModules(); _modulesLoaded = true; }
             await executeSlashCommand(STOP_COMMAND);
         },
-
-        /**
-         * @name SendStartCommand
-         * @description Manually sends the /start command to the channel.
-         * @returns {void}
-         */
         SendStartCommand: async () => {
-            log("Manual execution requested for /start command.", "info");
-            if (!_modulesLoaded) {
-                log("Modules not loaded. Attempting to load...", "info");
-                _executeCommand = await loadCommandExecutor();
-                if (!_executeCommand) {
-                    showToast("Failed to load Command Executor. Cannot send /start.", "error");
-                    return;
-                }
-                _modulesLoaded = true;
-            }
+            if (!_modulesLoaded) { await loadModules(); _modulesLoaded = true; }
             await executeSlashCommand(START_COMMAND);
         }
     };
