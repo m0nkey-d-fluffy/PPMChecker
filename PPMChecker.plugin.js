@@ -1,8 +1,8 @@
 /**
  * @name PPMChecker
  * @author m0nkey.d.fluffy
- * @description Automatically runs /ppm, filters for YOUR specific user ID in the response, and restarts if YOUR PPM is 0.
- * @version 1.0.5
+ * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list.
+ * @version 1.0.6
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -34,21 +34,21 @@ const pluginConfig = {
             type: "text",
             id: "notificationChannelId",
             name: "Notification Channel ID",
-            note: "Channel ID to send alerts and verbose logs to. (e.g., 123456789012345678)",
+            note: "The Discord Channel ID to which all alerts and verbose logs will be sent.",
             value: ""
         },
         {
             type: "switch",
             id: "sendClearCommand",
             name: "Send /clear command",
-            note: "CURRENTLY DISABLED IN CODE. (Default: true)",
+            note: "If enabled, the /clear command will be executed 10 seconds prior to the /ppm command.",
             value: true
         },
         {
             type: "switch",
             id: "isVerbose",
             name: "Verbose Logging",
-            note: "Send all captured PPM responses (including > 0) to the notification channel. (Default: false)",
+            note: "If enabled, all captured PPM responses (including healthy ones) will be sent to the notification channel.",
             value: false
         }
     ]
@@ -74,7 +74,8 @@ function PPMChecker(meta) {
         INTERVAL_MS: 15 * 60 * 1000,         // 15 minutes for scheduling
         CLEAR_DELAY_MS: 10 * 1000,           // 10 seconds delay between /clear and /ppm
         RELOAD_DELAY_MS: 6 * 60 * 1000,      // 6 minutes delay between /stop and /start
-        PPM_TIMEOUT_MS: 15 * 1000            // 15 seconds max wait for PPM response
+        PPM_TIMEOUT_MS: 15 * 1000,           // 15 seconds max wait for PPM response
+        VERIFY_WAIT_MS: 2 * 60 * 1000        // 2 minutes (120s) to wait after /start before verifying
     };
 
     // --- STATUS CONSTANTS ---
@@ -82,42 +83,10 @@ function PPMChecker(meta) {
     const CLUSTER_OFFLINE_MARKER = "CLUSTER_OFFLINE_MARKER";
 
     // --- COMMAND DATA ---
-
-    const CLEAR_COMMAND = {
-        name: "clear",
-        commandId: "1416039398792888330",
-        commandVersion: "1433501849713115315",
-        description: "Clear your friends list (Keep your GP friends and Favs)",
-        rank: 3,
-        options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }]
-    };
-
-    const PPM_COMMAND = {
-        name: "ppm",
-        commandId: "1414334983707033774",
-        commandVersion: "1414334983707033780",
-        description: "Check your current PackPerMinute",
-        rank: 1,
-        options: []
-    };
-
-    const STOP_COMMAND = {
-        name: "stop",
-        commandId: "1414334983707033773",
-        commandVersion: "1414334983707033779",
-        description: "Stop your cluster",
-        rank: 4,
-        options: []
-    };
-
-    const START_COMMAND = {
-        name: "start",
-        commandId: "1414334983707033772",
-        commandVersion: "1414334983707033778",
-        description: "Start your cluster",
-        rank: 2,
-        options: []
-    };
+    const CLEAR_COMMAND = { name: "clear", commandId: "1416039398792888330", commandVersion: "1433501849713115315", description: "Clear your friends list", rank: 3, options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }] };
+    const PPM_COMMAND = { name: "ppm", commandId: "1414334983707033774", commandVersion: "1414334983707033780", description: "Check your current PackPerMinute", rank: 1, options: [] };
+    const STOP_COMMAND = { name: "stop", commandId: "1414334983707033773", commandVersion: "1414334983707033779", description: "Stop your cluster", rank: 4, options: [] };
+    const START_COMMAND = { name: "start", commandId: "1414334983707033772", commandVersion: "1414334983707033778", description: "Start your cluster", rank: 2, options: [] };
 
     // Internal state
     let interval = null;
@@ -126,13 +95,12 @@ function PPMChecker(meta) {
     let _sendMessage = null; 
     let _modulesLoaded = false;
     let _ppmResolve = null;
-    let _currentUserId = null; // Store user ID here
+    let _currentUserId = null;
+    let _seenBotMessage = false; // Flag for timeout logic
 
     // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
-        get: (_target, key) => {
-            return BdApi.Data.load(meta.name, key) ?? getSetting(key)?.value;
-        },
+        get: (_target, key) => { return BdApi.Data.load(meta.name, key) ?? getSetting(key)?.value; },
         set: (_target, key, value) => {
             BdApi.Data.save(meta.name, key, value);
             const setting = getSetting(key);
@@ -143,16 +111,14 @@ function PPMChecker(meta) {
 
     const initSettings = (settingsArray = pluginConfig.settings) => {
         settingsArray.forEach(setting => {
-            if (setting.settings) {
-                initSettings(setting.settings);
-            } else if (setting.id) {
+            if (setting.settings) initSettings(setting.settings);
+            else if (setting.id) {
                 const value = settings[setting.id];
                 const settingObj = getSetting(setting.id);
                 if (settingObj) settingObj.value = value;
             }
         });
     };
-
 
     // --- UTILITIES ---
 
@@ -164,9 +130,7 @@ function PPMChecker(meta) {
             } else {
                 method(`[${meta.name}] ${message}`);
             }
-        } catch (e) {
-            console.log(`[${meta.name} | Fallback Log] ${message}`);
-        }
+        } catch (e) { console.log(`[${meta.name} | Fallback Log] ${message}`); }
     };
 
     const showToast = (message, type = "info") => {
@@ -182,9 +146,7 @@ function PPMChecker(meta) {
             return;
         }
         try {
-            const messageData = { content: message, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] };
-            _sendMessage(settings.notificationChannelId, messageData, undefined, {});
-            log(`Sent notification to channel ${settings.notificationChannelId}.`, "info");
+            _sendMessage(settings.notificationChannelId, { content: message, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] }, undefined, {});
         } catch (error) {
             log(`Error sending notification: ${error.message}`, "error");
         }
@@ -193,63 +155,41 @@ function PPMChecker(meta) {
 
     // --- MESSAGE LISTENER LOGIC ---
 
-    /**
-     * Searches message content and embeds for YOUR SPECIFIC PPM value.
-     */
     const capturePPMValue = (message) => {
-        if (!_ppmResolve) return; // No active PPM check pending
+        if (!_ppmResolve) return; 
+        _seenBotMessage = true;
 
-        // Ensure we know who "WE" are
         if (!_currentUserId) {
-            log("Cannot parse PPM: Current User ID not yet loaded.", "error");
+            log("Cannot parse PPM: Current User ID not loaded.", "error");
             return;
         }
-
-        // -----------------------------------------------------------------------
-        // TARGETED REGEX
-        // Matches: <@YOUR_ID> ... anything ... 🎁 **NUMBER**
-        // This ignores lines belonging to other people.
-        // -----------------------------------------------------------------------
-        // We allow <@ID> or <@!ID> (nickname format)
+        
         const myPpmRegex = new RegExp(`<@!?${_currentUserId}>.*?🎁\\s*\\*\\*(\\d+(?:\\.\\d+)?)\\*\\*`, "s");
 
         const searchAndResolve = (text, source) => {
             if (!text) return false;
 
-            // 1. Check for global offline text
             if (text.includes(CLUSTER_OFFLINE_STRING)) {
-                log(`Cluster Status CAPTURED (${source}): "${CLUSTER_OFFLINE_STRING}". Initiating /start.`, "warn");
+                log(`Cluster Status CAPTURED (${source}): "${CLUSTER_OFFLINE_STRING}".`, "warn");
                 _ppmResolve(CLUSTER_OFFLINE_MARKER); 
                 _ppmResolve = null;
                 return true;
             }
 
-            // 2. Search for MY specific entry
             const match = text.match(myPpmRegex);
-            
             if (match) {
-                const myValue = parseFloat(match[1]); // The captured number
-
-                // Conditional logging
+                const myValue = parseFloat(match[1]);
                 const color = myValue > 0 ? "#4CAF50" : "#FF0000";
                 const icon = myValue > 0 ? "✅" : "❌";
 
-                // Log finding
                 console.log(`%c[${meta.name}]%c ${icon} FOUND MY PPM (%c${source}%c): ${myValue}`,
-                    `color: ${color}; font-weight: bold;`,
-                    "color: unset; font-weight: unset;",
-                    "color: #1a73e8; font-weight: bold;",
-                    "color: unset; font-weight: unset;"
+                    `color: ${color}; font-weight: bold;`, "color: unset;", "color: #1a73e8; font-weight: bold;", "color: unset;"
                 );
 
-                // --- VERBOSE LOGIC ---
                 if (settings.isVerbose && settings.notificationChannelId) {
-                    const verboseMessage = `${icon} My PPM: **${myValue}**`;
-                    sendNotification(verboseMessage); 
+                    sendNotification(`${icon} My PPM: **${myValue}**`); 
                 }
-                // --- END VERBOSE LOGIC ---
 
-                // Resolve
                 _ppmResolve(myValue);
                 _ppmResolve = null;
                 return true;
@@ -257,18 +197,13 @@ function PPMChecker(meta) {
             return false;
         };
 
-        // Check message.content
         if (searchAndResolve(message.content, "Content")) return;
-
-        // Check embeds
         if (message.embeds && message.embeds.length > 0) {
             for (const embed of message.embeds) {
                 if (searchAndResolve(embed.description, "Embed Description")) return;
                 if (searchAndResolve(embed.title, "Embed Title")) return;
-
                 if (embed.fields && embed.fields.length > 0) {
                     for (const field of embed.fields) {
-                        // Check Field Value (This is where "Members" list usually is)
                         if (searchAndResolve(field.value, `Field: ${field.name}`)) return;
                     }
                 }
@@ -278,13 +213,19 @@ function PPMChecker(meta) {
 
     const waitForPPMResult = () => {
         if (_ppmResolve) return Promise.resolve("RACE_CONDITION");
+        _seenBotMessage = false; 
 
         return new Promise(resolve => {
             _ppmResolve = resolve;
+            
             setTimeout(() => {
                 if (_ppmResolve) {
-                    _ppmResolve("TIMEOUT");
-                    _ppmResolve = null;
+                    if (_seenBotMessage) {
+                        _ppmResolve("MISSING_USER");
+                    } else {
+                        _ppmResolve("TIMEOUT");
+                    }
+                    _ppmResolve = null; 
                 }
             }, CONFIG.PPM_TIMEOUT_MS);
         });
@@ -292,9 +233,6 @@ function PPMChecker(meta) {
 
     // --- INTERNAL MODULE LOADERS ---
 
-    /**
-     * Gets the current user ID so we know which line to read.
-     */
     const loadUserIdentity = () => {
         try {
             const userStore = BdApi.Webpack.getModule(BdApi.Webpack.Filters.byProps("getCurrentUser", "getUser"));
@@ -315,8 +253,6 @@ function PPMChecker(meta) {
 
     const loadCommandExecutor = async () => {
         try {
-            log("Attempting to find Command Executor module...");
-            // Standard filter for the interaction function
             const moduleFilter = (m) => {
                 const target = m.default ? m.default : m;
                 if (!target || typeof target !== 'object') return false;
@@ -332,7 +268,6 @@ function PPMChecker(meta) {
             if (!mod) throw new Error("Module filter failed.");
             
             const target = mod.default ? mod.default : mod;
-            // Helper to find the specific key
             const keyFinder = (t, k) => {
                 try {
                     const s = t[k].toString().toLowerCase();
@@ -341,7 +276,6 @@ function PPMChecker(meta) {
             };
             
             const funcKey = Object.getOwnPropertyNames(target).find(k => keyFinder(target, k));
-
             if (funcKey) return target[funcKey].bind(target);
             else throw new Error("Function key not found.");
         } catch (e) {
@@ -363,10 +297,8 @@ function PPMChecker(meta) {
                 const event = args[0]; 
                 if (event.type === 'MESSAGE_CREATE' || event.type === 'MESSAGE_UPDATE') {
                     const message = event.message || event.data;
-                    if (message && message.channel_id === CONFIG.CHANNEL_ID) {
-                        if (message.author?.id === CONFIG.BOT_APPLICATION_ID) {
-                            capturePPMValue(message);
-                        }
+                    if (message && message.channel_id === CONFIG.CHANNEL_ID && message.author?.id === CONFIG.BOT_APPLICATION_ID) {
+                        capturePPMValue(message);
                     }
                 }
             });
@@ -386,9 +318,7 @@ function PPMChecker(meta) {
     };
 
     const loadModules = async () => {
-        // Load identity first
         loadUserIdentity();
-        
         _executeCommand = await loadCommandExecutor();
         if (!_executeCommand) {
             log("Critical Command Executor failed to load.", "fatal");
@@ -407,7 +337,6 @@ function PPMChecker(meta) {
             log("Command Executor unavailable.", "error");
             return;
         }
-
         const name = command.name;
         log(`Executing COMMAND: "/${name}"`, "info");
 
@@ -460,7 +389,7 @@ function PPMChecker(meta) {
             };
 
             const mockChannel = { id: CONFIG.CHANNEL_ID, guild_id: CONFIG.GUILD_ID, type: 0 };
-            const mockGuild = { id: CONFIG.GUILD_ID, name: "MP - VIP" };
+            const mockGuild = { id: CONFIG.GUILD_ID };
 
             await _executeCommand({
                 command: realCommand,
@@ -472,6 +401,23 @@ function PPMChecker(meta) {
             
         } catch (error) {
             log(`Error executing "/${name}": ${error.message}`, "error");
+        }
+    };
+
+    const verifyRestart = async () => {
+        log(`Waiting ${CONFIG.VERIFY_WAIT_MS / 60000} minutes for cluster to warm up before verification...`, "info");
+        await wait(CONFIG.VERIFY_WAIT_MS);
+
+        log("Sending verification /ppm command...", "info");
+        await executeSlashCommand(PPM_COMMAND, {});
+        const verificationResult = await waitForPPMResult();
+
+        if (typeof verificationResult === 'number' && verificationResult > 0) {
+            log("VERIFICATION SUCCESS: PPM is > 0.", "info");
+            sendNotification("✅ **Restart Successful**\nCluster is back online and PPM is healthy.");
+        } else {
+            log("VERIFICATION FAILED: Cluster still reporting 0, missing, or timed out.", "error");
+            sendNotification("🚨 **Restart FAILED**\nCluster is still offline. Manual check required.");
         }
     };
 
@@ -491,45 +437,57 @@ function PPMChecker(meta) {
         }
 
         if (!_executeCommand) return;
-
         log("Scheduler running check...", "info");
 
-        // /clear is DISABLED
-        /*
+        // --- STEP 1: Execute /clear (If Enabled) ---
         if (settings.sendClearCommand) {
+            log("Setting 'sendClearCommand' is ON. Executing /clear.", "info");
             await executeSlashCommand(CLEAR_COMMAND, {}); 
+            log(`Waiting ${CONFIG.CLEAR_DELAY_MS / 1000}s before /ppm...`, "info");
             await wait(CONFIG.CLEAR_DELAY_MS);
+        } else {
+            log("Setting 'sendClearCommand' is OFF. Skipping /clear.", "info");
         }
-        */
 
+        // --- STEP 2: Execute /ppm & Wait for Result ---
         await executeSlashCommand(PPM_COMMAND, {});
         const ppmResult = await waitForPPMResult();
 
+        // --- STEP 3: Handle Result ---
         if (typeof ppmResult === 'number') {
             if (ppmResult > 0) {
                 log(`My PPM is Healthy (> 0): ${ppmResult}.`, "info");
             } else if (ppmResult === 0) {
                 log(`My PPM is 0. Initiating Restart.`, "warn");
-                sendNotification(`⚠️ **PPMChecker Alert!** ⚠️\n\nYOUR PPM is **0**. Restarting cluster in ${CONFIG.RELOAD_DELAY_MS / 60000} mins.`);
+                sendNotification(`⚠️ **PPMChecker Alert!** ⚠️\n\nYOUR PPM is **0**. Restarting cluster...`);
                 
                 await executeSlashCommand(STOP_COMMAND);
                 log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
                 await wait(CONFIG.RELOAD_DELAY_MS);
                 await executeSlashCommand(START_COMMAND);
-                log("Restart complete.", "info");
+                await verifyRestart(); 
             }
         } else if (ppmResult === CLUSTER_OFFLINE_MARKER) {
-            log(`Cluster offline. Restarting.`, "warn");
+            log(`Cluster offline. Sending /start.`, "warn");
             sendNotification(`❌ **PPMChecker Alert!** ❌\n\nCluster "Not Started". Sending /start.`);
             await executeSlashCommand(START_COMMAND);
+            await verifyRestart(); 
+
+        } else if (ppmResult === "MISSING_USER") {
+            log(`Bot replied, but User ID not found. Initiating Restart.`, "warn");
+            sendNotification(`❓ **PPMChecker Alert!** ❓\n\nYour ID was not found in the list. Restarting cluster...`);
+
+            await executeSlashCommand(STOP_COMMAND);
+            log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
+            await wait(CONFIG.RELOAD_DELAY_MS);
+            await executeSlashCommand(START_COMMAND);
+            await verifyRestart(); 
 
         } else if (ppmResult === "TIMEOUT") {
-            // If we timed out, it means either the bot didn't reply OR we weren't in the list
-            // We should NOT restart blindly here to avoid loops if we are just missing from the list.
-            // However, if the bot didn't reply at all, we might want to start. 
-            // For safety in this version: we assume timeout = bot lag or user not found = DO NOTHING.
-            log(`PPM check timed out (or User ID not found in list). Taking NO action to be safe.`, "error");
-            sendNotification(`❓ **PPMChecker Warning**\n\nPPM check timed out or your ID was not found in the response.`);
+            log(`Bot did not reply (TIMEOUT). Doing nothing until next cycle.`, "warn");
+            if (settings.isVerbose) {
+                sendNotification(`⏱️ PPM check timed out (bot did not reply). Taking no action.`);
+            }
             
         } else if (ppmResult === "RACE_CONDITION") {
             log("Skipping concurrent check.", "warn");
@@ -555,7 +513,9 @@ function PPMChecker(meta) {
             if (interval) { clearInterval(interval); interval = null; }
             if (_dispatcher) BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
             if (_ppmResolve) _ppmResolve("STOPPED");
-            BdApi.Patcher.unpatchAll(meta.name);
+            
+            BdApi.Patcher.unpatchAll(meta.name); 
+            
             _executeCommand = null;
             _dispatcher = null;
             _sendMessage = null;
