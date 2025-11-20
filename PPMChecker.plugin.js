@@ -68,7 +68,8 @@ function PPMChecker(meta) {
 
     // --- CONFIGURATION: Core IDs and Timing ---
     const CONFIG = {
-        CHANNEL_ID: "1343184699018842202",
+        CHANNEL_ID: "1343184699018842202",              // Chinese channel for monitoring /ppm
+        ENGLISH_CHANNEL_ID: "1334845816220811374",      // English channel for helper commands
         GUILD_ID: "1334603881652555896",
         BOT_APPLICATION_ID: "1334630845574676520",
         HELPER_ROLE_ID: "1426619911626686598",          // Helper role for group management
@@ -472,20 +473,21 @@ function PPMChecker(meta) {
 
     // --- EXECUTION LOGIC ---
 
-    const executeSlashCommand = async (command, optionValues = {}) => {
+    const executeSlashCommand = async (command, optionValues = {}, channelId = null) => {
         if (!_executeCommand) {
             log("Command Executor unavailable.", "error");
             return;
         }
         const name = command.name;
-        log(`Executing COMMAND: "/${name}"`, "info");
+        const targetChannelId = channelId || CONFIG.CHANNEL_ID;
+        log(`Executing COMMAND: "/${name}" in channel ${targetChannelId}`, "info");
 
         try {
             const realCommand = {
                 id: command.commandId,
                 version: command.commandVersion,
-                type: 1, 
-                inputType: 3, 
+                type: 1,
+                inputType: 3,
                 name: name,
                 applicationId: CONFIG.BOT_APPLICATION_ID,
                 options: command.options || [],
@@ -528,17 +530,17 @@ function PPMChecker(meta) {
                 }
             };
 
-            const mockChannel = { id: CONFIG.CHANNEL_ID, guild_id: CONFIG.GUILD_ID, type: 0 };
+            const mockChannel = { id: targetChannelId, guild_id: CONFIG.GUILD_ID, type: 0 };
             const mockGuild = { id: CONFIG.GUILD_ID };
 
             await _executeCommand({
                 command: realCommand,
                 optionValues: optionValues,
                 context: { channel: mockChannel, guild: mockGuild },
-                commandOrigin: 1, 
+                commandOrigin: 1,
                 commandTargetId: null
             });
-            
+
         } catch (error) {
             log(`Error executing "/${name}": ${error.message}`, "error");
         }
@@ -643,7 +645,7 @@ function PPMChecker(meta) {
 
             await executeSlashCommand(CLOSE_GROUP_COMMAND, {
                 "group-id": [{ type: "text", text: fullData.groupId }]
-            });
+            }, CONFIG.ENGLISH_CHANNEL_ID);
 
             sendNotification(`✅ Group ${fullData.groupId} has been closed.`);
             return;
