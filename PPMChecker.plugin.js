@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list.
- * @version 1.0.6
+ * @version 1.0.7
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -75,7 +75,9 @@ function PPMChecker(meta) {
         CLEAR_DELAY_MS: 10 * 1000,           // 10 seconds delay between /clear and /ppm
         RELOAD_DELAY_MS: 6 * 60 * 1000,      // 6 minutes delay between /stop and /start
         PPM_TIMEOUT_MS: 15 * 1000,           // 15 seconds max wait for PPM response
-        VERIFY_WAIT_MS: 2 * 60 * 1000        // 2 minutes (120s) to wait after /start before verifying
+        VERIFY_WAIT_MS: 2 * 60 * 1000,       // 2 minutes (120s) to wait after /start before verifying
+        COOLDOWN_BUFFER_MS: 10 * 1000,       // 10 seconds buffer to add to cooldown timer
+        START_RESPONSE_TIMEOUT_MS: 10 * 1000 // 10 seconds max wait for /start response
     };
 
     // --- STATUS CONSTANTS ---
@@ -92,11 +94,12 @@ function PPMChecker(meta) {
     let interval = null;
     let _executeCommand = null;
     let _dispatcher = null;
-    let _sendMessage = null; 
+    let _sendMessage = null;
     let _modulesLoaded = false;
     let _ppmResolve = null;
     let _currentUserId = null;
     let _seenBotMessage = false; // Flag for timeout logic
+    let _startCooldownResolve = null; // For handling /start cooldown responses
 
     // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
@@ -213,11 +216,11 @@ function PPMChecker(meta) {
 
     const waitForPPMResult = () => {
         if (_ppmResolve) return Promise.resolve("RACE_CONDITION");
-        _seenBotMessage = false; 
+        _seenBotMessage = false;
 
         return new Promise(resolve => {
             _ppmResolve = resolve;
-            
+
             setTimeout(() => {
                 if (_ppmResolve) {
                     if (_seenBotMessage) {
@@ -225,9 +228,79 @@ function PPMChecker(meta) {
                     } else {
                         _ppmResolve("TIMEOUT");
                     }
-                    _ppmResolve = null; 
+                    _ppmResolve = null;
                 }
             }, CONFIG.PPM_TIMEOUT_MS);
+        });
+    };
+
+    // --- COOLDOWN DETECTION FOR /START COMMAND ---
+
+    const parseCooldownTime = (text) => {
+        if (!text) return null;
+
+        // Match patterns like "You must wait 02:28 before starting again."
+        const cooldownRegex = /You must wait (\d{1,2}):(\d{2}) before starting again/i;
+        const match = text.match(cooldownRegex);
+
+        if (match) {
+            const minutes = parseInt(match[1], 10);
+            const seconds = parseInt(match[2], 10);
+            const totalMs = (minutes * 60 * 1000) + (seconds * 1000);
+            return totalMs;
+        }
+        return null;
+    };
+
+    const captureStartCooldown = (message) => {
+        if (!_startCooldownResolve) return;
+
+        const searchForCooldown = (text) => {
+            if (!text) return false;
+
+            const cooldownMs = parseCooldownTime(text);
+            if (cooldownMs !== null) {
+                log(`Cooldown detected: ${cooldownMs / 1000} seconds`, "warn");
+                _startCooldownResolve({ type: 'cooldown', waitMs: cooldownMs });
+                _startCooldownResolve = null;
+                return true;
+            }
+            return false;
+        };
+
+        // Search message content
+        if (searchForCooldown(message.content)) return;
+
+        // Search embeds
+        if (message.embeds && message.embeds.length > 0) {
+            for (const embed of message.embeds) {
+                if (searchForCooldown(embed.description)) return;
+                if (searchForCooldown(embed.title)) return;
+                if (embed.fields && embed.fields.length > 0) {
+                    for (const field of embed.fields) {
+                        if (searchForCooldown(field.value)) return;
+                    }
+                }
+            }
+        }
+
+        // If no cooldown found, consider it a success response
+        _startCooldownResolve({ type: 'success' });
+        _startCooldownResolve = null;
+    };
+
+    const waitForStartResponse = () => {
+        if (_startCooldownResolve) return Promise.resolve({ type: 'race_condition' });
+
+        return new Promise(resolve => {
+            _startCooldownResolve = resolve;
+
+            setTimeout(() => {
+                if (_startCooldownResolve) {
+                    _startCooldownResolve({ type: 'timeout' });
+                    _startCooldownResolve = null;
+                }
+            }, CONFIG.START_RESPONSE_TIMEOUT_MS);
         });
     };
 
@@ -294,11 +367,12 @@ function PPMChecker(meta) {
             _dispatcher = dispatchModule;
 
             BdApi.Patcher.after(meta.name, _dispatcher, "dispatch", (_, args) => {
-                const event = args[0]; 
+                const event = args[0];
                 if (event.type === 'MESSAGE_CREATE' || event.type === 'MESSAGE_UPDATE') {
                     const message = event.message || event.data;
                     if (message && message.channel_id === CONFIG.CHANNEL_ID && message.author?.id === CONFIG.BOT_APPLICATION_ID) {
                         capturePPMValue(message);
+                        captureStartCooldown(message);
                     }
                 }
             });
@@ -404,6 +478,45 @@ function PPMChecker(meta) {
         }
     };
 
+    const executeStartWithCooldownHandling = async () => {
+        log("Attempting to execute /start command...", "info");
+
+        // Execute the /start command
+        await executeSlashCommand(START_COMMAND);
+
+        // Wait for bot response
+        const response = await waitForStartResponse();
+
+        if (response.type === 'cooldown') {
+            const totalWaitMs = response.waitMs + CONFIG.COOLDOWN_BUFFER_MS;
+            const minutes = Math.floor(totalWaitMs / 60000);
+            const seconds = Math.floor((totalWaitMs % 60000) / 1000);
+
+            log(`Cooldown detected! Waiting ${minutes}m ${seconds}s (original cooldown + 10s buffer)...`, "warn");
+            sendNotification(`⏳ **Cooldown Detected**\nWaiting ${minutes}m ${seconds}s before retrying /start...`);
+
+            // Wait for cooldown period + buffer
+            await wait(totalWaitMs);
+
+            // Retry the /start command
+            log("Cooldown expired. Retrying /start command...", "info");
+            await executeSlashCommand(START_COMMAND);
+
+            // Wait for response again (in case there's still a cooldown)
+            const retryResponse = await waitForStartResponse();
+            if (retryResponse.type === 'cooldown') {
+                log("Still on cooldown after retry. Manual intervention may be required.", "error");
+                sendNotification("⚠️ **Still on cooldown** after retry. Please check manually.");
+            } else {
+                log("/start command executed successfully after cooldown.", "info");
+            }
+        } else if (response.type === 'success') {
+            log("/start command executed successfully.", "info");
+        } else if (response.type === 'timeout') {
+            log("/start command sent, but no response received (assuming success).", "warn");
+        }
+    };
+
     const verifyRestart = async () => {
         log(`Waiting ${CONFIG.VERIFY_WAIT_MS / 60000} minutes for cluster to warm up before verification...`, "info");
         await wait(CONFIG.VERIFY_WAIT_MS);
@@ -460,17 +573,17 @@ function PPMChecker(meta) {
             } else if (ppmResult === 0) {
                 log(`My PPM is 0. Initiating Restart.`, "warn");
                 sendNotification(`⚠️ **PPMChecker Alert!** ⚠️\n\nYOUR PPM is **0**. Restarting cluster...`);
-                
+
                 await executeSlashCommand(STOP_COMMAND);
                 log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
                 await wait(CONFIG.RELOAD_DELAY_MS);
-                await executeSlashCommand(START_COMMAND);
+                await executeStartWithCooldownHandling();
                 await verifyRestart(); 
             }
         } else if (ppmResult === CLUSTER_OFFLINE_MARKER) {
             log(`Cluster offline. Sending /start.`, "warn");
             sendNotification(`❌ **PPMChecker Alert!** ❌\n\nCluster "Not Started". Sending /start.`);
-            await executeSlashCommand(START_COMMAND);
+            await executeStartWithCooldownHandling();
             await verifyRestart(); 
 
         } else if (ppmResult === "MISSING_USER") {
@@ -480,7 +593,7 @@ function PPMChecker(meta) {
             await executeSlashCommand(STOP_COMMAND);
             log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
             await wait(CONFIG.RELOAD_DELAY_MS);
-            await executeSlashCommand(START_COMMAND);
+            await executeStartWithCooldownHandling();
             await verifyRestart(); 
 
         } else if (ppmResult === "TIMEOUT") {
@@ -513,13 +626,15 @@ function PPMChecker(meta) {
             if (interval) { clearInterval(interval); interval = null; }
             if (_dispatcher) BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
             if (_ppmResolve) _ppmResolve("STOPPED");
-            
-            BdApi.Patcher.unpatchAll(meta.name); 
-            
+            if (_startCooldownResolve) _startCooldownResolve({ type: 'stopped' });
+
+            BdApi.Patcher.unpatchAll(meta.name);
+
             _executeCommand = null;
             _dispatcher = null;
             _sendMessage = null;
             _ppmResolve = null;
+            _startCooldownResolve = null;
             _modulesLoaded = false;
             log("Stopped.", "info");
             showToast("PPMChecker stopped.", "info");
@@ -541,7 +656,7 @@ function PPMChecker(meta) {
         },
         SendStartCommand: async () => {
             if (!_modulesLoaded) { await loadModules(); _modulesLoaded = true; }
-            await executeSlashCommand(START_COMMAND);
+            await executeStartWithCooldownHandling();
         }
     };
 }
