@@ -1,7 +1,7 @@
 # PPMChecker Plugin for BetterDiscord
 
-**Author:** m0nkey.d.fluffy  
-**Version:** 1.0.6
+**Author:** m0nkey.d.fluffy
+**Version:** 1.0.7
 
 ## Description
 
@@ -13,6 +13,7 @@ PPMChecker is an automation plugin for BetterDiscord designed to monitor a user'
     -   Triggers a full restart sequence (`/stop` > 6 min wait > `/start`) if **Your PPM is 0**.
     -   Triggers a full restart sequence if the bot replies but **Your User ID is missing** from the list.
     -   Executes an immediate `/start` if the cluster is reported as **"Cluster not started"**.
+-   **Cooldown Detection & Auto-Retry:** Automatically detects bot cooldown messages (e.g., "You must wait 02:28 before starting again"), pauses for the required time plus a 10-second buffer, and automatically retries the `/start` command.
 -   **Restart Verification:** After any recovery action, the plugin waits **2 minutes** for the cluster to warm up, performs a follow-up `/ppm` check, and sends a "Restart Successful" or "Restart FAILED" notification.
 -   **Safe Timeout:** If the bot fails to respond to the `/ppm` command entirely (a true timeout), **no action is taken** to prevent restart loops caused by bot or API lag.
 
@@ -72,7 +73,7 @@ Trigger plugin functions directly from the Discord Console.
 
 ## Full Workflow Breakdown
 
-This is the complete logic sequence for v1.0.6.
+This is the complete logic sequence for v1.0.7.
 
 ### 1. Plugin Start
 1.  **Identity Check:** The plugin loads the current user's Discord ID.
@@ -96,14 +97,14 @@ This is the complete logic sequence for v1.0.6.
         1.  A "⚠️ YOUR PPM is 0" alert is sent.
         2.  Executes `/stop`.
         3.  Waits for **6 minutes**.
-        4.  Executes `/start`.
+        4.  Executes `/start` **with cooldown detection**.
         5.  Triggers **Restart Verification**.
 
 -   **❌ Case 3: Offline ("Cluster not started")**
     -   **Trigger:** The bot's response contains the text "Cluster not started".
     -   **Action:**
         1.  A "❌ Cluster 'Not Started'" alert is sent.
-        2.  Executes `/start` **immediately**.
+        2.  Executes `/start` **immediately with cooldown detection**.
         3.  Triggers **Restart Verification**.
 
 -   **❓ Case 4: User Missing (Bot Replied)**
@@ -112,7 +113,7 @@ This is the complete logic sequence for v1.0.6.
         1.  A "❓ Your ID was not found" alert is sent.
         2.  Executes `/stop`.
         3.  Waits for **6 minutes**.
-        4.  Executes `/start`.
+        4.  Executes `/start` **with cooldown detection**.
         5.  Triggers **Restart Verification**.
 
 -   **⏱️ Case 5: Timeout (No Bot Response)**
@@ -121,7 +122,20 @@ This is the complete logic sequence for v1.0.6.
         1.  **No action is taken.** The plugin logs a "Bot did not reply" warning.
         2.  This prevents restart loops if the bot is lagging or offline. The plugin will simply try again on the next 15-minute cycle.
 
-### 4. Restart Verification
+### 4. Cooldown Detection & Handling
+-   When executing the `/start` command, the plugin:
+    1.  Sends the `/start` command to the bot.
+    2.  Waits up to **10 seconds** for a bot response.
+    3.  **If cooldown detected:**
+        -   Parses the cooldown message (e.g., "You must wait 02:28 before starting again").
+        -   Calculates total wait time = cooldown time + **10 second buffer**.
+        -   Sends a "⏳ **Cooldown Detected**" notification with the wait time.
+        -   Waits for the full duration.
+        -   Automatically retries the `/start` command.
+    4.  **If successful:** Proceeds normally with restart verification.
+    5.  **If timeout:** Assumes success and continues (bot may have accepted the command without responding).
+
+### 5. Restart Verification
 -   After any restart action (Cases 2, 3, or 4), the plugin:
     1.  Waits **2 minutes** for the cluster to warm up.
     2.  Executes `/ppm` one more time.
