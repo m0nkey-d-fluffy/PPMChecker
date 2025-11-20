@@ -509,11 +509,20 @@ function PPMChecker(meta) {
                 sendNotification("⚠️ **Still on cooldown** after retry. Please check manually.");
             } else {
                 log("/start command executed successfully after cooldown.", "info");
+                if (settings.isVerbose) {
+                    sendNotification("✅ **/start Success**\nCluster start command executed successfully after cooldown.");
+                }
             }
         } else if (response.type === 'success') {
             log("/start command executed successfully.", "info");
+            if (settings.isVerbose) {
+                sendNotification("✅ **/start Success**\nCluster start command executed successfully.");
+            }
         } else if (response.type === 'timeout') {
             log("/start command sent, but no response received (assuming success).", "warn");
+            if (settings.isVerbose) {
+                sendNotification("⏱️ **/start Timeout**\nNo response received (assuming success).");
+            }
         }
     };
 
