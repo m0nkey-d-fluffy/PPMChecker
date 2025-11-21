@@ -664,7 +664,8 @@ function PPMChecker(meta) {
                 await wait(2000); // Small delay between commands
             }
 
-            sendNotification(`✅ Stopped ${usersWithZeroPPM.length} user cluster(s).`);
+            const userMentions = usersWithZeroPPM.map(u => `<@${u.userId}>`).join(', ');
+            sendNotification(`✅ Stopped ${usersWithZeroPPM.length} user(s): ${userMentions}`);
         }
     };
 
