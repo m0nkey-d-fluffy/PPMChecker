@@ -154,6 +154,6 @@ This is the complete logic sequence for v1.0.8.
         -   Executes `/stop_cluster @user` to restart that specific user's cluster.
     -   **Entire Group at 0 PPM:**
         -   If ALL users in the group (including yourself) have 0 PPM, the plugin sends a "🚨 **Entire Group Down**" alert.
-        -   Executes `/close_group <group-id>` in the **English channel** to avoid mass pings in other channels.
+        -   Executes `/close_group <group-id>` in the **English channel** where most helpers operate and help is requested.
 -   **Self-Management Priority:** The plugin always handles your own 0 PPM situation with `/stop` first, then checks other users.
--   **Channel Routing:** Helper commands (`/stop_cluster` and `/close_group`) execute in the designated English channel to prevent notification spam.
+-   **Channel Routing:** `/close_group` executes in the English channel since it publicly pings all users in the group and that's where most helpers and help requests are located.
