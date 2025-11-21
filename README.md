@@ -1,7 +1,7 @@
 # PPMChecker Plugin for BetterDiscord
 
 **Author:** m0nkey.d.fluffy
-**Version:** 1.0.7
+**Version:** 1.0.8
 
 ## Description
 
@@ -13,6 +13,9 @@ PPMChecker is an automation plugin for BetterDiscord designed to monitor a user'
     -   Triggers a full restart sequence (`/stop` > 6 min wait > `/start`) if **Your PPM is 0**.
     -   Triggers a full restart sequence if the bot replies but **Your User ID is missing** from the list.
     -   Executes an immediate `/start` if the cluster is reported as **"Cluster not started"**.
+-   **Group-Wide Monitoring (Helper Role):** If you have the @helper role, the plugin also monitors ALL users in the PPM response:
+    -   Executes `/stop_cluster @user` if any other user has 0 PPM.
+    -   Executes `/close_group <group-id>` (in English channel) if ALL users in the group have 0 PPM.
 -   **Cooldown Detection & Auto-Retry:** Automatically detects bot cooldown messages (e.g., "You must wait 02:28 before starting again"), pauses for the required time plus a 10-second buffer, and automatically retries the `/start` command.
 -   **Restart Verification:** After any recovery action, the plugin waits **2 minutes** for the cluster to warm up, performs a follow-up `/ppm` check, and sends a "Restart Successful" or "Restart FAILED" notification.
 -   **Safe Timeout:** If the bot fails to respond to the `/ppm` command entirely (a true timeout), **no action is taken** to prevent restart loops caused by bot or API lag.
@@ -73,7 +76,7 @@ Trigger plugin functions directly from the Discord Console.
 
 ## Full Workflow Breakdown
 
-This is the complete logic sequence for v1.0.7.
+This is the complete logic sequence for v1.0.8.
 
 ### 1. Plugin Start
 1.  **Identity Check:** The plugin loads the current user's Discord ID.
@@ -141,3 +144,16 @@ This is the complete logic sequence for v1.0.7.
     2.  Executes `/ppm` one more time.
     3.  Checks the result.
     4.  Sends a "✅ **Restart Successful**" or "🚨 **Restart FAILED**" notification based on the outcome of this final check.
+
+### 6. Group-Wide Monitoring (Helper Role Only)
+-   **Prerequisite:** The user must have the @helper role assigned in Discord.
+-   **When it runs:** After each `/ppm` check, if you have the helper role, the plugin scans ALL users in the response.
+-   **Actions:**
+    -   **Individual User at 0 PPM:**
+        -   If any other user (not yourself) has 0 PPM, the plugin sends a "🔧 **Group Member Down**" alert.
+        -   Executes `/stop_cluster @user` to restart that specific user's cluster.
+    -   **Entire Group at 0 PPM:**
+        -   If ALL users in the group (including yourself) have 0 PPM, the plugin sends a "🚨 **Entire Group Down**" alert.
+        -   Executes `/close_group <group-id>` in the **English channel** where most helpers operate and help is requested.
+-   **Self-Management Priority:** The plugin always handles your own 0 PPM situation with `/stop` first, then checks other users.
+-   **Channel Routing:** `/close_group` executes in the English channel since it publicly pings all users in the group and that's where most helpers and help requests are located.
