@@ -641,7 +641,7 @@ function PPMChecker(meta) {
         // If ALL users have 0 PPM, close the entire group
         if (allUsersZero && fullData.groupId) {
             log(`All users have 0 PPM! Closing entire group: ${fullData.groupId}`, "warn");
-            sendNotification(`🚨 **Group Alert** 🚨\n\nAll users in group have 0 PPM. Closing group ${fullData.groupId}...`);
+            sendNotification(`🚨 **Group Alert** 🚨\nAll users in group have 0 PPM. Closing group ${fullData.groupId}...`);
 
             await executeSlashCommand(CLOSE_GROUP_COMMAND, {
                 "group-id": [{ type: "text", text: fullData.groupId }]
@@ -654,7 +654,7 @@ function PPMChecker(meta) {
         // Otherwise, stop individual users with 0 PPM
         if (usersWithZeroPPM.length > 0) {
             log(`Stopping ${usersWithZeroPPM.length} users with 0 PPM...`, "info");
-            sendNotification(`⚠️ **Helper Action** ⚠️\n\nStopping ${usersWithZeroPPM.length} user(s) with 0 PPM...`);
+            sendNotification(`⚠️ **Helper Action** ⚠️\nStopping ${usersWithZeroPPM.length} user(s) with 0 PPM...`);
 
             for (const user of usersWithZeroPPM) {
                 log(`Stopping cluster for user ${user.userId}...`, "info");
@@ -722,7 +722,7 @@ function PPMChecker(meta) {
                 log(`My PPM is Healthy (> 0): ${myPpm}.`, "info");
             } else if (myPpm === 0) {
                 log(`My PPM is 0. Initiating Restart.`, "warn");
-                sendNotification(`⚠️ **PPMChecker Alert!** ⚠️\n\nYOUR PPM is **0**. Restarting cluster...`);
+                sendNotification(`⚠️ **PPMChecker Alert!** ⚠️\nYOUR PPM is **0**. Restarting cluster...`);
 
                 await executeSlashCommand(STOP_COMMAND);
                 log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
@@ -732,13 +732,13 @@ function PPMChecker(meta) {
             }
         } else if (myPpm === CLUSTER_OFFLINE_MARKER) {
             log(`Cluster offline. Sending /start.`, "warn");
-            sendNotification(`❌ **PPMChecker Alert!** ❌\n\nCluster "Not Started". Sending /start.`);
+            sendNotification(`❌ **PPMChecker Alert!** ❌\nCluster "Not Started". Sending /start.`);
             await executeStartWithCooldownHandling();
             await verifyRestart();
 
         } else if (myPpm === "MISSING_USER") {
             log(`Bot replied, but User ID not found. Initiating Restart.`, "warn");
-            sendNotification(`❓ **PPMChecker Alert!** ❓\n\nYour ID was not found in the list. Restarting cluster...`);
+            sendNotification(`❓ **PPMChecker Alert!** ❓\nYour ID was not found in the list. Restarting cluster...`);
 
             await executeSlashCommand(STOP_COMMAND);
             log(`Waiting ${CONFIG.RELOAD_DELAY_MS / 60000} mins...`, "warn");
