@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.8
+ * @version 1.0.9
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
