@@ -665,7 +665,7 @@ function PPMChecker(meta) {
             }
 
             const userMentions = usersWithZeroPPM.map(u => `<@${u.userId}>`).join(', ');
-            sendNotification(`✅ Stopped ${usersWithZeroPPM.length} user(s): ${userMentions}`);
+            sendNotification(`🛑 Stopped ${usersWithZeroPPM.length} user(s): ${userMentions}`);
         }
     };
 
