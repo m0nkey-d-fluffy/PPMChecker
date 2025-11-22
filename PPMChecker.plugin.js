@@ -42,7 +42,7 @@ const pluginConfig = {
             id: "sendClearCommand",
             name: "Send /clear command",
             note: "If enabled, the /clear command will be executed 10 seconds prior to the /ppm command.",
-            value: true
+            value: false
         },
         {
             type: "switch",
@@ -665,7 +665,7 @@ function PPMChecker(meta) {
             }
 
             const userMentions = usersWithZeroPPM.map(u => `<@${u.userId}>`).join(', ');
-            sendNotification(`✅ Stopped ${usersWithZeroPPM.length} user(s): ${userMentions}`);
+            sendNotification(`🛑 Stopped ${usersWithZeroPPM.length} user(s): ${userMentions}`);
         }
     };
 
