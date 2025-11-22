@@ -632,6 +632,11 @@ function PPMChecker(meta) {
 
         log(`Helper role detected. Checking all ${fullData.users.length} users in group...`, "info");
 
+        // Debug: Log all parsed users and their PPM values
+        fullData.users.forEach(u => {
+            log(`  User ${u.userId}: PPM = ${u.ppm}`, "info");
+        });
+
         // Find users with 0 PPM (excluding current user)
         const usersWithZeroPPM = fullData.users.filter(u => u.ppm === 0 && u.userId !== _currentUserId);
         const allUsersZero = fullData.users.every(u => u.ppm === 0);
