@@ -42,7 +42,7 @@ All settings are managed via the BetterDiscord settings panel.
     -   Enable **Developer Mode** (*User Settings > Advanced > Developer Mode*).
     -   Right-click the desired channel and select **"Copy Channel ID"**.
     
--   **Send /clear command** (Default: ON)
+-   **Send /clear command** (Default: OFF)
     -   If enabled, the `/clear` command will be executed 10 seconds prior to the `/ppm` command.
     
 -   **Verbose Logging** (Default: OFF)
