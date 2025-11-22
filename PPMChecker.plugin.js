@@ -641,7 +641,7 @@ function PPMChecker(meta) {
         const usersWithZeroPPM = fullData.users.filter(u => u.ppm === 0 && u.userId !== _currentUserId);
         const allUsersZero = fullData.users.every(u => u.ppm === 0);
 
-        log(`Found ${usersWithZeroPPM.length} other users with 0 PPM. All users zero: ${allUsersZero}`, "info");
+        log(`Found ${usersWithZeroPPM.length} other users with 0 PPM. All users zero: ${allUsersZero}. Group ID: ${fullData.groupId || 'NOT FOUND'}`, "info");
 
         // If ALL users have 0 PPM, close the entire group
         if (allUsersZero && fullData.groupId) {
