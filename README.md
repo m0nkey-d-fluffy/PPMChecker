@@ -1,7 +1,7 @@
 # PPMChecker Plugin for BetterDiscord
 
 **Author:** m0nkey.d.fluffy
-**Version:** 1.0.8
+**Version:** 1.0.9
 
 ## Description
 
@@ -76,7 +76,7 @@ Trigger plugin functions directly from the Discord Console.
 
 ## Full Workflow Breakdown
 
-This is the complete logic sequence for v1.0.8.
+This is the complete logic sequence for v1.0.9.
 
 ### 1. Plugin Start
 1.  **Identity Check:** The plugin loads the current user's Discord ID.

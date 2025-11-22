@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.8
+ * @version 1.0.9
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -202,7 +202,7 @@ function PPMChecker(meta) {
         
         const myPpmRegex = new RegExp(`<@!?${_currentUserId}>.*?🎁\\s*\\*\\*(\\d+(?:\\.\\d+)?)\\*\\*`, "s");
 
-        const searchAndResolve = (text, source) => {
+        const searchAndResolve = (text, source, embedTitle = null) => {
             if (!text) return false;
 
             if (text.includes(CLUSTER_OFFLINE_STRING)) {
@@ -227,7 +227,9 @@ function PPMChecker(meta) {
                 }
 
                 // Parse full response data (all users + group ID)
-                const fullData = parseFullPPMResponse(text);
+                // Combine embed title with text to capture group ID from title
+                const combinedText = embedTitle ? `${embedTitle}\n${text}` : text;
+                const fullData = parseFullPPMResponse(combinedText);
 
                 // Resolve with comprehensive data
                 _ppmResolve({
@@ -243,11 +245,11 @@ function PPMChecker(meta) {
         if (searchAndResolve(message.content, "Content")) return;
         if (message.embeds && message.embeds.length > 0) {
             for (const embed of message.embeds) {
-                if (searchAndResolve(embed.description, "Embed Description")) return;
+                if (searchAndResolve(embed.description, "Embed Description", embed.title)) return;
                 if (searchAndResolve(embed.title, "Embed Title")) return;
                 if (embed.fields && embed.fields.length > 0) {
                     for (const field of embed.fields) {
-                        if (searchAndResolve(field.value, `Field: ${field.name}`)) return;
+                        if (searchAndResolve(field.value, `Field: ${field.name}`, embed.title)) return;
                     }
                 }
             }
@@ -632,11 +634,16 @@ function PPMChecker(meta) {
 
         log(`Helper role detected. Checking all ${fullData.users.length} users in group...`, "info");
 
+        // Debug: Log all parsed users and their PPM values
+        fullData.users.forEach(u => {
+            log(`  User ${u.userId}: PPM = ${u.ppm}`, "info");
+        });
+
         // Find users with 0 PPM (excluding current user)
         const usersWithZeroPPM = fullData.users.filter(u => u.ppm === 0 && u.userId !== _currentUserId);
         const allUsersZero = fullData.users.every(u => u.ppm === 0);
 
-        log(`Found ${usersWithZeroPPM.length} other users with 0 PPM. All users zero: ${allUsersZero}`, "info");
+        log(`Found ${usersWithZeroPPM.length} other users with 0 PPM. All users zero: ${allUsersZero}. Group ID: ${fullData.groupId || 'NOT FOUND'}`, "info");
 
         // If ALL users have 0 PPM, close the entire group
         if (allUsersZero && fullData.groupId) {
