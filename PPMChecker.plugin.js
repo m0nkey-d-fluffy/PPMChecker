@@ -202,7 +202,7 @@ function PPMChecker(meta) {
         
         const myPpmRegex = new RegExp(`<@!?${_currentUserId}>.*?🎁\\s*\\*\\*(\\d+(?:\\.\\d+)?)\\*\\*`, "s");
 
-        const searchAndResolve = (text, source) => {
+        const searchAndResolve = (text, source, embedTitle = null) => {
             if (!text) return false;
 
             if (text.includes(CLUSTER_OFFLINE_STRING)) {
@@ -227,7 +227,9 @@ function PPMChecker(meta) {
                 }
 
                 // Parse full response data (all users + group ID)
-                const fullData = parseFullPPMResponse(text);
+                // Combine embed title with text to capture group ID from title
+                const combinedText = embedTitle ? `${embedTitle}\n${text}` : text;
+                const fullData = parseFullPPMResponse(combinedText);
 
                 // Resolve with comprehensive data
                 _ppmResolve({
@@ -243,11 +245,11 @@ function PPMChecker(meta) {
         if (searchAndResolve(message.content, "Content")) return;
         if (message.embeds && message.embeds.length > 0) {
             for (const embed of message.embeds) {
-                if (searchAndResolve(embed.description, "Embed Description")) return;
+                if (searchAndResolve(embed.description, "Embed Description", embed.title)) return;
                 if (searchAndResolve(embed.title, "Embed Title")) return;
                 if (embed.fields && embed.fields.length > 0) {
                     for (const field of embed.fields) {
-                        if (searchAndResolve(field.value, `Field: ${field.name}`)) return;
+                        if (searchAndResolve(field.value, `Field: ${field.name}`, embed.title)) return;
                     }
                 }
             }
