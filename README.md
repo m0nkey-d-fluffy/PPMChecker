@@ -1,7 +1,7 @@
 # PPMChecker Plugin for BetterDiscord
 
 **Author:** m0nkey.d.fluffy
-**Version:** 1.0.9
+**Version:** 1.0.10
 
 ## Description
 
@@ -19,6 +19,7 @@ PPMChecker is an automation plugin for BetterDiscord designed to monitor a user'
 -   **Cooldown Detection & Auto-Retry:** Automatically detects bot cooldown messages (e.g., "You must wait 02:28 before starting again"), pauses for the required time plus a 10-second buffer, and automatically retries the `/start` command.
 -   **Restart Verification:** After any recovery action, the plugin waits **2 minutes** for the cluster to warm up, performs a follow-up `/ppm` check, and sends a "Restart Successful" or "Restart FAILED" notification.
 -   **Safe Timeout:** If the bot fails to respond to the `/ppm` command entirely (a true timeout), **no action is taken** to prevent restart loops caused by bot or API lag.
+-   **Auto-Kick Detection & Auto-Rejoin:** Automatically detects when Dreama kicks you for reaching 99 friends, waits 5 minutes 10 seconds, and automatically rejoins by executing `/start`.
 
 ## Installation
 
@@ -76,7 +77,7 @@ Trigger plugin functions directly from the Discord Console.
 
 ## Full Workflow Breakdown
 
-This is the complete logic sequence for v1.0.9.
+This is the complete logic sequence for v1.0.10.
 
 ### 1. Plugin Start
 1.  **Identity Check:** The plugin loads the current user's Discord ID.
@@ -157,3 +158,12 @@ This is the complete logic sequence for v1.0.9.
         -   Executes `/close_group <group-id>` in the **English channel** where most helpers operate and help is requested.
 -   **Self-Management Priority:** The plugin always handles your own 0 PPM situation with `/stop` first, then checks other users.
 -   **Channel Routing:** `/close_group` executes in the English channel since it publicly pings all users in the group and that's where most helpers and help requests are located.
+
+### 7. Auto-Kick Detection & Auto-Rejoin
+-   **Trigger:** Dreama bot sends a DM with "Auto Kick" title when you reach 99 friends.
+-   **Action:**
+    1.  Plugin detects the auto-kick DM embed.
+    2.  Sends a "🚨 **Auto Kick Detected**" notification.
+    3.  Waits **5 minutes 10 seconds** (310 seconds).
+    4.  Automatically executes `/start` to rejoin the group with cooldown handling.
+    5.  Sends a "⏰ **Auto-Rejoining**" notification when executing the rejoin.
