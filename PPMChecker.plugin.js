@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.9
+ * @version 1.0.10
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -79,12 +79,15 @@ function PPMChecker(meta) {
         PPM_TIMEOUT_MS: 15 * 1000,           // 15 seconds max wait for PPM response
         VERIFY_WAIT_MS: 2 * 60 * 1000,       // 2 minutes (120s) to wait after /start before verifying
         COOLDOWN_BUFFER_MS: 10 * 1000,       // 10 seconds buffer to add to cooldown timer
-        START_RESPONSE_TIMEOUT_MS: 10 * 1000 // 10 seconds max wait for /start response
+        START_RESPONSE_TIMEOUT_MS: 10 * 1000, // 10 seconds max wait for /start response
+        AUTO_KICK_REJOIN_DELAY_MS: 5 * 60 * 1000 + 10 * 1000 // 5 minutes 10 seconds (310s) delay before auto-rejoin
     };
 
     // --- STATUS CONSTANTS ---
     const CLUSTER_OFFLINE_STRING = "Cluster not started";
     const CLUSTER_OFFLINE_MARKER = "CLUSTER_OFFLINE_MARKER";
+    const AUTO_KICK_TITLE = "Auto Kick";
+    const AUTO_KICK_MESSAGE = "You have reached 99 friends";
 
     // --- COMMAND DATA ---
     const CLEAR_COMMAND = { name: "clear", commandId: "1416039398792888330", commandVersion: "1433501849713115315", description: "Clear your friends list", rank: 3, options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }] };
@@ -104,6 +107,7 @@ function PPMChecker(meta) {
     let _currentUserId = null;
     let _seenBotMessage = false; // Flag for timeout logic
     let _startCooldownResolve = null; // For handling /start cooldown responses
+    let _autoRejoinTimeout = null; // For tracking auto-rejoin timer
 
     // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
@@ -346,11 +350,63 @@ function PPMChecker(meta) {
         });
     };
 
+    // --- AUTO KICK DETECTION & REJOIN ---
+
+    const detectAutoKick = (message) => {
+        // Only process DMs from the bot
+        if (message.guild_id || message.author?.id !== CONFIG.BOT_APPLICATION_ID) return;
+
+        const searchForAutoKick = (title, description) => {
+            if (!title && !description) return false;
+
+            // Check for Auto Kick in title and "99 friends" message
+            const hasAutoKickTitle = title && title.includes(AUTO_KICK_TITLE);
+            const hasKickMessage = description && description.includes(AUTO_KICK_MESSAGE);
+
+            if (hasAutoKickTitle && hasKickMessage) {
+                log(`🚨 AUTO KICK DETECTED! Bot kicked us for reaching 99 friends.`, "warn");
+                sendNotification(`🚨 **Auto Kick Detected**\nKicked for reaching 99 friends. Rejoining in ${CONFIG.AUTO_KICK_REJOIN_DELAY_MS / 1000}s (5m 10s)...`);
+
+                // Clear any existing rejoin timeout
+                if (_autoRejoinTimeout) {
+                    clearTimeout(_autoRejoinTimeout);
+                    _autoRejoinTimeout = null;
+                }
+
+                // Schedule auto-rejoin
+                _autoRejoinTimeout = setTimeout(async () => {
+                    log("Auto-rejoin timer expired. Executing /start to rejoin...", "info");
+                    sendNotification("⏰ **Auto-Rejoining**\nExecuting /start to rejoin the group...");
+
+                    await executeStartWithCooldownHandling();
+
+                    _autoRejoinTimeout = null;
+                }, CONFIG.AUTO_KICK_REJOIN_DELAY_MS);
+
+                return true;
+            }
+            return false;
+        };
+
+        // Check message content
+        if (message.content && message.content.includes(AUTO_KICK_TITLE)) {
+            searchForAutoKick(message.content, message.content);
+            return;
+        }
+
+        // Check embeds
+        if (message.embeds && message.embeds.length > 0) {
+            for (const embed of message.embeds) {
+                if (searchForAutoKick(embed.title, embed.description)) return;
+            }
+        }
+    };
+
     // --- INTERNAL MODULE LOADERS ---
 
     const loadUserIdentity = () => {
         try {
-            const userStore = BdApi.Webpack.getModule(BdApi.Webpack.Filters.byProps("getCurrentUser", "getUser"));
+            const userStore = BdApi.Webpack.getStore("UserStore");
             if (userStore) {
                 const user = userStore.getCurrentUser();
                 if (user) {
@@ -402,7 +458,7 @@ function PPMChecker(meta) {
     const loadDispatcherPatch = async () => {
         try {
             let mod = BdApi.Webpack.getModule(m => m.dispatch && m._events, { searchExports: true });
-            if (!mod) mod = BdApi.Webpack.getModule(BdApi.Webpack.Filters.byProps("subscribe", "unsubscribe", "dispatch"));
+            if (!mod) mod = BdApi.Webpack.getByKeys("subscribe", "unsubscribe", "dispatch");
             const dispatchModule = mod.dispatch ? mod : (mod.default ? mod.default : mod);
 
             if (!dispatchModule) throw new Error("No Dispatcher found.");
@@ -412,9 +468,17 @@ function PPMChecker(meta) {
                 const event = args[0];
                 if (event.type === 'MESSAGE_CREATE' || event.type === 'MESSAGE_UPDATE') {
                     const message = event.message || event.data;
-                    if (message && message.channel_id === CONFIG.CHANNEL_ID && message.author?.id === CONFIG.BOT_APPLICATION_ID) {
-                        capturePPMValue(message);
-                        captureStartCooldown(message);
+                    if (message && message.author?.id === CONFIG.BOT_APPLICATION_ID) {
+                        // Check for auto-kick DMs (no guild_id means it's a DM)
+                        if (!message.guild_id) {
+                            detectAutoKick(message);
+                        }
+
+                        // Handle PPM responses in the configured channel
+                        if (message.channel_id === CONFIG.CHANNEL_ID) {
+                            capturePPMValue(message);
+                            captureStartCooldown(message);
+                        }
                     }
                 }
             });
@@ -426,7 +490,7 @@ function PPMChecker(meta) {
 
     const loadSendMessageModule = async () => {
         try {
-            const mod = await BdApi.Webpack.waitForModule(BdApi.Webpack.Filters.byProps("sendMessage", "receiveMessage"));
+            const mod = await BdApi.Webpack.waitForModule(m => m?.sendMessage && m?.receiveMessage);
             _sendMessage = mod.sendMessage;
         } catch (error) {
             log(`Failed to load Send Message module`, "error");
@@ -449,7 +513,7 @@ function PPMChecker(meta) {
 
     const hasHelperRole = () => {
         try {
-            const GuildMemberStore = BdApi.Webpack.getModule(m => m.getMember, { searchExports: true });
+            const GuildMemberStore = BdApi.Webpack.getStore("GuildMemberStore");
             if (!GuildMemberStore) {
                 log("Could not find GuildMemberStore for role check.", "warn");
                 return false;
@@ -781,6 +845,7 @@ function PPMChecker(meta) {
         },
         stop: () => {
             if (interval) { clearInterval(interval); interval = null; }
+            if (_autoRejoinTimeout) { clearTimeout(_autoRejoinTimeout); _autoRejoinTimeout = null; }
             if (_dispatcher) BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
             if (_ppmResolve) _ppmResolve("STOPPED");
             if (_startCooldownResolve) _startCooldownResolve({ type: 'stopped' });
@@ -792,6 +857,7 @@ function PPMChecker(meta) {
             _sendMessage = null;
             _ppmResolve = null;
             _startCooldownResolve = null;
+            _autoRejoinTimeout = null;
             _modulesLoaded = false;
             log("Stopped.", "info");
             showToast("PPMChecker stopped.", "info");
