@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.10
+ * @version 1.0.11
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -80,7 +80,9 @@ function PPMChecker(meta) {
         VERIFY_WAIT_MS: 2 * 60 * 1000,       // 2 minutes (120s) to wait after /start before verifying
         COOLDOWN_BUFFER_MS: 10 * 1000,       // 10 seconds buffer to add to cooldown timer
         START_RESPONSE_TIMEOUT_MS: 10 * 1000, // 10 seconds max wait for /start response
-        AUTO_KICK_REJOIN_DELAY_MS: 5 * 60 * 1000 + 10 * 1000 // 5 minutes 10 seconds (310s) delay before auto-rejoin
+        AUTO_KICK_REJOIN_DELAY_MS: 5 * 60 * 1000 + 10 * 1000, // 5 minutes 10 seconds (310s) delay before auto-rejoin
+        NOTIFICATION_RATE_LIMIT_MS: 2000,    // 2 seconds between notifications (Discord allows ~5 per 5s)
+        MAX_NOTIFICATION_QUEUE: 20           // Max queued notifications to prevent memory issues
     };
 
     // --- STATUS CONSTANTS ---
@@ -108,6 +110,8 @@ function PPMChecker(meta) {
     let _seenBotMessage = false; // Flag for timeout logic
     let _startCooldownResolve = null; // For handling /start cooldown responses
     let _autoRejoinTimeout = null; // For tracking auto-rejoin timer
+    let _notificationQueue = []; // Queue for rate-limited notifications
+    let _notificationProcessing = false; // Flag to prevent concurrent queue processing
 
     // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
@@ -151,16 +155,70 @@ function PPMChecker(meta) {
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+    // --- RATE-LIMITED NOTIFICATION SYSTEM ---
+
+    const processNotificationQueue = async () => {
+        if (_notificationProcessing || _notificationQueue.length === 0) return;
+        _notificationProcessing = true;
+
+        while (_notificationQueue.length > 0) {
+            const message = _notificationQueue.shift();
+
+            if (!_sendMessage || !settings.notificationChannelId) {
+                log("Cannot send notification: Send Message module unavailable or Notification Channel ID not set.", "warn");
+                continue;
+            }
+
+            try {
+                await _sendMessage(settings.notificationChannelId, {
+                    content: message,
+                    tts: false,
+                    invalidEmojis: [],
+                    validNonShortcutEmojis: []
+                }, undefined, {});
+
+                log(`Notification sent (${_notificationQueue.length} remaining in queue)`, "info");
+
+                // Wait between messages to avoid rate limit
+                if (_notificationQueue.length > 0) {
+                    await wait(CONFIG.NOTIFICATION_RATE_LIMIT_MS);
+                }
+            } catch (error) {
+                log(`Error sending notification: ${error.message}`, "error");
+
+                // If rate limited, wait longer before retrying
+                if (error.message && error.message.includes("rate limit")) {
+                    log("Rate limit hit! Waiting 5 seconds before retry...", "warn");
+                    await wait(5000);
+                }
+            }
+        }
+
+        _notificationProcessing = false;
+    };
+
     const sendNotification = (message) => {
         if (!_sendMessage || !settings.notificationChannelId) {
             log("Cannot send notification: Send Message module unavailable or Notification Channel ID not set.", "warn");
             return;
         }
-        try {
-            _sendMessage(settings.notificationChannelId, { content: message, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] }, undefined, {});
-        } catch (error) {
-            log(`Error sending notification: ${error.message}`, "error");
+
+        // Add to queue
+        _notificationQueue.push(message);
+
+        // Warn if queue is getting large
+        if (_notificationQueue.length > CONFIG.MAX_NOTIFICATION_QUEUE) {
+            log(`Warning: Notification queue exceeded ${CONFIG.MAX_NOTIFICATION_QUEUE} messages! Dropping oldest message.`, "warn");
+            _notificationQueue.shift(); // Remove oldest message
         }
+
+        // Log queue status
+        if (_notificationQueue.length > 5) {
+            log(`Notification queued (${_notificationQueue.length} in queue)`, "warn");
+        }
+
+        // Start processing queue
+        processNotificationQueue();
     };
 
 
@@ -851,6 +909,13 @@ function PPMChecker(meta) {
             if (_startCooldownResolve) _startCooldownResolve({ type: 'stopped' });
 
             BdApi.Patcher.unpatchAll(meta.name);
+
+            // Clear notification queue
+            if (_notificationQueue.length > 0) {
+                log(`Cleared ${_notificationQueue.length} queued notifications.`, "info");
+            }
+            _notificationQueue = [];
+            _notificationProcessing = false;
 
             _executeCommand = null;
             _dispatcher = null;
