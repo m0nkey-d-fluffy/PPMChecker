@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.11
+ * @version 1.0.12
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -50,6 +50,13 @@ const pluginConfig = {
             name: "Verbose Logging",
             note: "If enabled, all captured PPM responses (including healthy ones) will be sent to the notification channel.",
             value: false
+        },
+        {
+            type: "switch",
+            id: "antiIdle",
+            name: "Anti-Idle (Typing Indicator)",
+            note: "If enabled, sends a typing indicator to the notification channel every 4 minutes to prevent idle status. Only works if notification channel is set.",
+            value: false
         }
     ]
 };
@@ -82,7 +89,8 @@ function PPMChecker(meta) {
         START_RESPONSE_TIMEOUT_MS: 10 * 1000, // 10 seconds max wait for /start response
         AUTO_KICK_REJOIN_DELAY_MS: 5 * 60 * 1000 + 10 * 1000, // 5 minutes 10 seconds (310s) delay before auto-rejoin
         NOTIFICATION_RATE_LIMIT_MS: 2000,    // 2 seconds between notifications (Discord allows ~5 per 5s)
-        MAX_NOTIFICATION_QUEUE: 20           // Max queued notifications to prevent memory issues
+        MAX_NOTIFICATION_QUEUE: 20,          // Max queued notifications to prevent memory issues
+        ANTI_IDLE_INTERVAL_MS: 4 * 60 * 1000 // 4 minutes - send typing indicator to prevent idle (Discord idles after 5 min)
     };
 
     // --- STATUS CONSTANTS ---
@@ -112,6 +120,8 @@ function PPMChecker(meta) {
     let _autoRejoinTimeout = null; // For tracking auto-rejoin timer
     let _notificationQueue = []; // Queue for rate-limited notifications
     let _notificationProcessing = false; // Flag to prevent concurrent queue processing
+    let _antiIdleInterval = null; // Interval for anti-idle typing indicators
+    let _typingModule = null; // Discord typing module
 
     // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
@@ -555,6 +565,20 @@ function PPMChecker(meta) {
         }
     };
 
+    const loadTypingModule = async () => {
+        try {
+            const mod = BdApi.Webpack.getByKeys("startTyping", "stopTyping");
+            if (mod) {
+                _typingModule = mod;
+                log("Successfully loaded Typing module.", "info");
+            } else {
+                log("Could not find Typing module.", "warn");
+            }
+        } catch (error) {
+            log(`Failed to load Typing module: ${error.message}`, "error");
+        }
+    };
+
     const loadModules = async () => {
         loadUserIdentity();
         _executeCommand = await loadCommandExecutor();
@@ -564,7 +588,51 @@ function PPMChecker(meta) {
         }
         await loadDispatcherPatch();
         await loadSendMessageModule();
+        await loadTypingModule();
         return true;
+    };
+
+    // --- ANTI-IDLE SYSTEM ---
+
+    const sendTypingIndicator = () => {
+        if (!_typingModule || !settings.notificationChannelId) {
+            return;
+        }
+
+        try {
+            _typingModule.startTyping(settings.notificationChannelId);
+            log("Anti-idle: Sent typing indicator.", "info");
+        } catch (error) {
+            log(`Error sending typing indicator: ${error.message}`, "error");
+        }
+    };
+
+    const startAntiIdle = () => {
+        if (!settings.antiIdle || !settings.notificationChannelId) {
+            return;
+        }
+
+        if (_antiIdleInterval) {
+            clearInterval(_antiIdleInterval);
+        }
+
+        log(`Anti-idle enabled: Sending typing indicator every ${CONFIG.ANTI_IDLE_INTERVAL_MS / 60000} minutes.`, "info");
+
+        // Send immediately on start
+        sendTypingIndicator();
+
+        // Then set up interval
+        _antiIdleInterval = setInterval(() => {
+            sendTypingIndicator();
+        }, CONFIG.ANTI_IDLE_INTERVAL_MS);
+    };
+
+    const stopAntiIdle = () => {
+        if (_antiIdleInterval) {
+            clearInterval(_antiIdleInterval);
+            _antiIdleInterval = null;
+            log("Anti-idle stopped.", "info");
+        }
     };
 
     // --- HELPER ROLE CHECKING ---
@@ -811,6 +879,9 @@ function PPMChecker(meta) {
             if (settings.notificationChannelId) {
                 sendNotification(`✅ **PPMChecker (v${meta.version})** Started. Monitoring for user ID: ${_currentUserId}`);
             }
+
+            // Start anti-idle if enabled
+            startAntiIdle();
         }
 
         if (!_executeCommand) return;
@@ -904,6 +975,10 @@ function PPMChecker(meta) {
         stop: () => {
             if (interval) { clearInterval(interval); interval = null; }
             if (_autoRejoinTimeout) { clearTimeout(_autoRejoinTimeout); _autoRejoinTimeout = null; }
+
+            // Stop anti-idle
+            stopAntiIdle();
+
             if (_dispatcher) BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
             if (_ppmResolve) _ppmResolve("STOPPED");
             if (_startCooldownResolve) _startCooldownResolve({ type: 'stopped' });
@@ -920,6 +995,7 @@ function PPMChecker(meta) {
             _executeCommand = null;
             _dispatcher = null;
             _sendMessage = null;
+            _typingModule = null;
             _ppmResolve = null;
             _startCooldownResolve = null;
             _autoRejoinTimeout = null;
