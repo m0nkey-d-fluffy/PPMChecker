@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.10
+ * @version 1.0.11
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -38,6 +38,13 @@ const pluginConfig = {
             value: ""
         },
         {
+            type: "text",
+            id: "userNotificationChannelId",
+            name: "User Notification Channel ID (Helper)",
+            note: "Channel where helper actions (/close_group commands) are executed and users are pinged. Falls back to English channel if not set.",
+            value: ""
+        },
+        {
             type: "switch",
             id: "sendClearCommand",
             name: "Send /clear command",
@@ -49,6 +56,20 @@ const pluginConfig = {
             id: "isVerbose",
             name: "Verbose Logging",
             note: "If enabled, all captured PPM responses (including healthy ones) will be sent to the notification channel.",
+            value: false
+        },
+        {
+            type: "switch",
+            id: "antiIdle",
+            name: "Anti-Idle (Typing Indicator)",
+            note: "If enabled, sends a typing indicator to the notification channel every 4 minutes to prevent idle status. Only works if notification channel is set.",
+            value: false
+        },
+        {
+            type: "switch",
+            id: "forceIndividualStops",
+            name: "Force Individual Stops (Helper)",
+            note: "If enabled, always use /stop_cluster for individual users instead of /close_group for dead groups.",
             value: false
         }
     ]
@@ -80,7 +101,10 @@ function PPMChecker(meta) {
         VERIFY_WAIT_MS: 2 * 60 * 1000,       // 2 minutes (120s) to wait after /start before verifying
         COOLDOWN_BUFFER_MS: 10 * 1000,       // 10 seconds buffer to add to cooldown timer
         START_RESPONSE_TIMEOUT_MS: 10 * 1000, // 10 seconds max wait for /start response
-        AUTO_KICK_REJOIN_DELAY_MS: 5 * 60 * 1000 + 10 * 1000 // 5 minutes 10 seconds (310s) delay before auto-rejoin
+        AUTO_KICK_REJOIN_DELAY_MS: 5 * 60 * 1000 + 10 * 1000, // 5 minutes 10 seconds (310s) delay before auto-rejoin
+        NOTIFICATION_RATE_LIMIT_MS: 2000,    // 2 seconds between notifications (Discord allows ~5 per 5s)
+        MAX_NOTIFICATION_QUEUE: 20,          // Max queued notifications to prevent memory issues
+        ANTI_IDLE_INTERVAL_MS: 4 * 60 * 1000 // 4 minutes - send typing indicator to prevent idle (Discord idles after 5 min)
     };
 
     // --- STATUS CONSTANTS ---
@@ -108,6 +132,10 @@ function PPMChecker(meta) {
     let _seenBotMessage = false; // Flag for timeout logic
     let _startCooldownResolve = null; // For handling /start cooldown responses
     let _autoRejoinTimeout = null; // For tracking auto-rejoin timer
+    let _notificationQueue = []; // Queue for rate-limited notifications
+    let _notificationProcessing = false; // Flag to prevent concurrent queue processing
+    let _antiIdleInterval = null; // Interval for anti-idle typing indicators
+    let _typingModule = null; // Discord typing module
 
     // --- SETTINGS MANAGEMENT ---
     const settings = new Proxy({}, {
@@ -151,16 +179,70 @@ function PPMChecker(meta) {
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+    // --- RATE-LIMITED NOTIFICATION SYSTEM ---
+
+    const processNotificationQueue = async () => {
+        if (_notificationProcessing || _notificationQueue.length === 0) return;
+        _notificationProcessing = true;
+
+        while (_notificationQueue.length > 0) {
+            const message = _notificationQueue.shift();
+
+            if (!_sendMessage || !settings.notificationChannelId) {
+                log("Cannot send notification: Send Message module unavailable or Notification Channel ID not set.", "warn");
+                continue;
+            }
+
+            try {
+                await _sendMessage(settings.notificationChannelId, {
+                    content: message,
+                    tts: false,
+                    invalidEmojis: [],
+                    validNonShortcutEmojis: []
+                }, undefined, {});
+
+                log(`Notification sent (${_notificationQueue.length} remaining in queue)`, "info");
+
+                // Wait between messages to avoid rate limit
+                if (_notificationQueue.length > 0) {
+                    await wait(CONFIG.NOTIFICATION_RATE_LIMIT_MS);
+                }
+            } catch (error) {
+                log(`Error sending notification: ${error.message}`, "error");
+
+                // If rate limited, wait longer before retrying
+                if (error.message && error.message.includes("rate limit")) {
+                    log("Rate limit hit! Waiting 5 seconds before retry...", "warn");
+                    await wait(5000);
+                }
+            }
+        }
+
+        _notificationProcessing = false;
+    };
+
     const sendNotification = (message) => {
         if (!_sendMessage || !settings.notificationChannelId) {
             log("Cannot send notification: Send Message module unavailable or Notification Channel ID not set.", "warn");
             return;
         }
-        try {
-            _sendMessage(settings.notificationChannelId, { content: message, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] }, undefined, {});
-        } catch (error) {
-            log(`Error sending notification: ${error.message}`, "error");
+
+        // Add to queue
+        _notificationQueue.push(message);
+
+        // Warn if queue is getting large
+        if (_notificationQueue.length > CONFIG.MAX_NOTIFICATION_QUEUE) {
+            log(`Warning: Notification queue exceeded ${CONFIG.MAX_NOTIFICATION_QUEUE} messages! Dropping oldest message.`, "warn");
+            _notificationQueue.shift(); // Remove oldest message
         }
+
+        // Log queue status
+        if (_notificationQueue.length > 5) {
+            log(`Notification queued (${_notificationQueue.length} in queue)`, "warn");
+        }
+
+        // Start processing queue
+        processNotificationQueue();
     };
 
 
@@ -172,6 +254,7 @@ function PPMChecker(meta) {
 
         const result = {
             groupId: null,
+            groupName: null,
             users: []
         };
 
@@ -179,17 +262,36 @@ function PPMChecker(meta) {
         const groupMatch = text.match(/Group\s+(.+)/);
         if (groupMatch) {
             result.groupId = groupMatch[1].trim();
+            // Extract group name (part before first colon)
+            const colonIndex = result.groupId.indexOf(':');
+            if (colonIndex !== -1) {
+                result.groupName = result.groupId.substring(0, colonIndex);
+            } else {
+                result.groupName = result.groupId;
+            }
         }
 
-        // Extract all users with their PPM values
-        // Pattern: @username (optional emojis/text) — 🎁 **PPM_VALUE**
-        const userPattern = /<@!?(\d+)>[^🎁]*🎁\s*\*\*([\d.]+)\*\*/g;
+        // Extract all users with their display names, leader status, and PPM values
+        // Pattern: <@userid> displayName (optional 👑 Leader or other emojis) — 🎁 **PPM_VALUE**
+        // Capture everything between <@userid> and the — to get the display name
+        const userPattern = /<@!?(\d+)>\s*([^—]+?)\s*—\s*🎁\s*\*\*([\d.]+)\*\*/g;
         let match;
 
         while ((match = userPattern.exec(text)) !== null) {
             const userId = match[1];
-            const ppm = parseFloat(match[2]);
-            result.users.push({ userId, ppm });
+            let displayInfo = match[2].trim();
+            const ppm = parseFloat(match[3]);
+
+            // Check if user is leader
+            const isLeader = displayInfo.includes('👑');
+
+            // Clean up display name (remove leader crown and "Leader" text)
+            let displayName = displayInfo
+                .replace(/👑/g, '')
+                .replace(/Leader/g, '')
+                .trim();
+
+            result.users.push({ userId, displayName, isLeader, ppm });
         }
 
         return result.users.length > 0 ? result : null;
@@ -497,6 +599,20 @@ function PPMChecker(meta) {
         }
     };
 
+    const loadTypingModule = async () => {
+        try {
+            const mod = BdApi.Webpack.getByKeys("startTyping", "stopTyping");
+            if (mod) {
+                _typingModule = mod;
+                log("Successfully loaded Typing module.", "info");
+            } else {
+                log("Could not find Typing module.", "warn");
+            }
+        } catch (error) {
+            log(`Failed to load Typing module: ${error.message}`, "error");
+        }
+    };
+
     const loadModules = async () => {
         loadUserIdentity();
         _executeCommand = await loadCommandExecutor();
@@ -506,7 +622,70 @@ function PPMChecker(meta) {
         }
         await loadDispatcherPatch();
         await loadSendMessageModule();
+        await loadTypingModule();
         return true;
+    };
+
+    // --- ANTI-IDLE SYSTEM ---
+
+    const sendTypingIndicator = () => {
+        if (!_typingModule) {
+            return;
+        }
+
+        const channelsToKeepAlive = [];
+
+        // Add private notification channel
+        if (settings.notificationChannelId) {
+            channelsToKeepAlive.push(settings.notificationChannelId);
+        }
+
+        // Add user notification channel if it's different
+        if (settings.userNotificationChannelId &&
+            settings.userNotificationChannelId !== settings.notificationChannelId) {
+            channelsToKeepAlive.push(settings.userNotificationChannelId);
+        }
+
+        if (channelsToKeepAlive.length === 0) {
+            return;
+        }
+
+        try {
+            channelsToKeepAlive.forEach(channelId => {
+                _typingModule.startTyping(channelId);
+            });
+            log(`Anti-idle: Sent typing indicator to ${channelsToKeepAlive.length} channel(s).`, "info");
+        } catch (error) {
+            log(`Error sending typing indicator: ${error.message}`, "error");
+        }
+    };
+
+    const startAntiIdle = () => {
+        if (!settings.antiIdle || !settings.notificationChannelId) {
+            return;
+        }
+
+        if (_antiIdleInterval) {
+            clearInterval(_antiIdleInterval);
+        }
+
+        log(`Anti-idle enabled: Sending typing indicator every ${CONFIG.ANTI_IDLE_INTERVAL_MS / 60000} minutes.`, "info");
+
+        // Send immediately on start
+        sendTypingIndicator();
+
+        // Then set up interval
+        _antiIdleInterval = setInterval(() => {
+            sendTypingIndicator();
+        }, CONFIG.ANTI_IDLE_INTERVAL_MS);
+    };
+
+    const stopAntiIdle = () => {
+        if (_antiIdleInterval) {
+            clearInterval(_antiIdleInterval);
+            _antiIdleInterval = null;
+            log("Anti-idle stopped.", "info");
+        }
     };
 
     // --- HELPER ROLE CHECKING ---
@@ -684,6 +863,29 @@ function PPMChecker(meta) {
 
     // --- MULTI-USER PPM CHECKING (HELPER ROLE) ---
 
+    // Send notification to user notification channel (for helper pings)
+    const sendUserNotification = (message) => {
+        // Use user notification channel, fallback to English channel, then regular notification channel
+        const targetChannelId = settings.userNotificationChannelId || CONFIG.ENGLISH_CHANNEL_ID || settings.notificationChannelId;
+
+        if (!_sendMessage || !targetChannelId) {
+            log("Cannot send user notification: Send Message module unavailable or no channel ID set.", "warn");
+            return;
+        }
+
+        try {
+            _sendMessage(targetChannelId, {
+                content: message,
+                tts: false,
+                invalidEmojis: [],
+                validNonShortcutEmojis: []
+            }, undefined, {});
+            log(`User notification sent to channel ${targetChannelId}`, "info");
+        } catch (error) {
+            log(`Error sending user notification: ${error.message}`, "error");
+        }
+    };
+
     const handleGroupPPMCheck = async (fullData) => {
         if (!fullData || !fullData.users || fullData.users.length === 0) {
             log("No group data available for multi-user check.", "info");
@@ -705,38 +907,89 @@ function PPMChecker(meta) {
 
         // Find users with 0 PPM (excluding current user)
         const usersWithZeroPPM = fullData.users.filter(u => u.ppm === 0 && u.userId !== _currentUserId);
+        const totalUsers = fullData.users.length;
         const allUsersZero = fullData.users.every(u => u.ppm === 0);
 
         log(`Found ${usersWithZeroPPM.length} other users with 0 PPM. All users zero: ${allUsersZero}. Group ID: ${fullData.groupId || 'NOT FOUND'}`, "info");
 
-        // If ALL users have 0 PPM, close the entire group
-        if (allUsersZero && fullData.groupId) {
-            log(`All users have 0 PPM! Closing entire group: ${fullData.groupId}`, "warn");
-            sendNotification(`🚨 **Group Alert** 🚨\nAll users in group have 0 PPM. Closing group ${fullData.groupId}...`);
+        // Determine channel for /close_group command
+        const userNotificationChannelId = settings.userNotificationChannelId || CONFIG.ENGLISH_CHANNEL_ID;
 
+        // If ALL users have 0 PPM (dead group) and not forcing individual stops
+        if (allUsersZero && fullData.groupId && !settings.forceIndividualStops) {
+            log(`Dead group detected! Closing entire group: ${fullData.groupId}`, "warn");
+
+            // Execute /close_group in user notification channel
             await executeSlashCommand(CLOSE_GROUP_COMMAND, {
                 "group-id": [{ type: "text", text: fullData.groupId }]
-            }, CONFIG.ENGLISH_CHANNEL_ID);
+            }, userNotificationChannelId);
 
-            sendNotification(`✅ Group ${fullData.groupId} has been closed.`);
+            const userMentions = fullData.users.map(u => `<@${u.userId}>`).join(', ');
+            const displayNames = fullData.users.map(u => `@${u.displayName || u.userId}`).join(', ');
+
+            // Send simple notification to private channel
+            sendNotification(`Whole group ${fullData.groupId} with users ${userMentions} were 0 ppm and the group has been closed.`);
+
+            // Send TheHelperHelper-style formatted report to user notification channel
+            const groupName = fullData.groupName || 'unknown';
+            let report = `───────────────────────────────────\n`;
+            report += `📋 Report for Group: ${fullData.groupId} (⁠${groupName})\n\n`;
+            report += `Members\n`;
+
+            fullData.users.forEach(user => {
+                const statusIcon = user.ppm === 0 ? '🔴 ' : '';
+                const leaderBadge = user.isLeader ? ' 👑 Leader' : '';
+                const displayName = user.displayName || user.userId;
+                report += `${statusIcon}${displayName}${leaderBadge} — 🎁 ${user.ppm.toFixed(2)}\n`;
+            });
+
+            report += `\n💀 Dead Group detected. Closing entire group... Please start in 5 minutes, ${displayNames}\n`;
+            report += `───────────────────────────────────`;
+
+            sendUserNotification(report);
+
             return;
         }
 
         // Otherwise, stop individual users with 0 PPM
         if (usersWithZeroPPM.length > 0) {
-            log(`Stopping ${usersWithZeroPPM.length} users with 0 PPM...`, "info");
-            sendNotification(`⚠️ **Helper Action** ⚠️\nStopping ${usersWithZeroPPM.length} user(s) with 0 PPM...`);
+            log(`Stopping ${usersWithZeroPPM.length} users with 0 PPM individually...`, "info");
+
+            const stoppedUsers = [];
 
             for (const user of usersWithZeroPPM) {
                 log(`Stopping cluster for user ${user.userId}...`, "info");
                 await executeSlashCommand(STOP_CLUSTER_COMMAND, {
                     "target": [{ type: "userMention", userId: user.userId }]
                 });
-                await wait(2000); // Small delay between commands
+                stoppedUsers.push(user.userId);
+                await wait(2000); // 2-second delay between commands
             }
 
-            const userMentions = usersWithZeroPPM.map(u => `<@${u.userId}>`).join(', ');
-            sendNotification(`🛑 Stopped ${usersWithZeroPPM.length} user(s): ${userMentions}`);
+            const userMentions = stoppedUsers.map(id => `<@${id}>`).join(', ');
+
+            // Send simple notification to private channel
+            sendNotification(`Individual user(s) ${userMentions} were 0 and were kicked from their cluster.`);
+
+            // Send TheHelperHelper-style formatted report to user notification channel
+            const groupName = fullData.groupName || 'unknown';
+            const stoppedDisplayNames = usersWithZeroPPM.map(u => `@${u.displayName || u.userId}`).join(', ');
+
+            let report = `───────────────────────────────────\n`;
+            report += `📋 Report for Group: ${fullData.groupId} (⁠${groupName})\n\n`;
+            report += `Members\n`;
+
+            fullData.users.forEach(user => {
+                const statusIcon = user.ppm === 0 ? '🔴 ' : '';
+                const leaderBadge = user.isLeader ? ' 👑 Leader' : '';
+                const displayName = user.displayName || user.userId;
+                report += `${statusIcon}${displayName}${leaderBadge} — 🎁 ${user.ppm.toFixed(2)}\n`;
+            });
+
+            report += `\n🛑 Auto-stopped cluster for ${stoppedDisplayNames}. You had 0ppm; please start again in 5 minutes.\n`;
+            report += `───────────────────────────────────`;
+
+            sendUserNotification(report);
         }
     };
 
@@ -753,6 +1006,9 @@ function PPMChecker(meta) {
             if (settings.notificationChannelId) {
                 sendNotification(`✅ **PPMChecker (v${meta.version})** Started. Monitoring for user ID: ${_currentUserId}`);
             }
+
+            // Start anti-idle if enabled
+            startAntiIdle();
         }
 
         if (!_executeCommand) return;
@@ -846,15 +1102,27 @@ function PPMChecker(meta) {
         stop: () => {
             if (interval) { clearInterval(interval); interval = null; }
             if (_autoRejoinTimeout) { clearTimeout(_autoRejoinTimeout); _autoRejoinTimeout = null; }
+
+            // Stop anti-idle
+            stopAntiIdle();
+
             if (_dispatcher) BdApi.Patcher.unpatchAll(meta.name, _dispatcher);
             if (_ppmResolve) _ppmResolve("STOPPED");
             if (_startCooldownResolve) _startCooldownResolve({ type: 'stopped' });
 
             BdApi.Patcher.unpatchAll(meta.name);
 
+            // Clear notification queue
+            if (_notificationQueue.length > 0) {
+                log(`Cleared ${_notificationQueue.length} queued notifications.`, "info");
+            }
+            _notificationQueue = [];
+            _notificationProcessing = false;
+
             _executeCommand = null;
             _dispatcher = null;
             _sendMessage = null;
+            _typingModule = null;
             _ppmResolve = null;
             _startCooldownResolve = null;
             _autoRejoinTimeout = null;
