@@ -1,7 +1,7 @@
 # PPMChecker Plugin for BetterDiscord
 
 **Author:** m0nkey.d.fluffy
-**Version:** 1.0.10
+**Version:** 1.0.11
 
 ## Description
 
