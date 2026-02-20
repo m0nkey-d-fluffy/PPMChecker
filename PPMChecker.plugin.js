@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.11
+ * @version 1.0.14
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -92,7 +92,7 @@ function PPMChecker(meta) {
         CHANNEL_ID: "1343184699018842202",              // Chinese channel for monitoring /ppm
         ENGLISH_CHANNEL_ID: "1334845816220811374",      // English channel for helper commands
         GUILD_ID: "1334603881652555896",
-        BOT_APPLICATION_ID: "1334630845574676520",
+        BOT_APPLICATION_ID: "1474129399073996974",
         HELPER_ROLE_ID: "1426619911626686598",          // Helper role for group management
         INTERVAL_MS: 15 * 60 * 1000,         // 15 minutes for scheduling
         CLEAR_DELAY_MS: 10 * 1000,           // 10 seconds delay between /clear and /ppm
@@ -113,13 +113,13 @@ function PPMChecker(meta) {
     const AUTO_KICK_TITLE = "Auto Kick";
     const AUTO_KICK_MESSAGE = "You have reached 99 friends";
 
-    // --- COMMAND DATA ---
-    const CLEAR_COMMAND = { name: "clear", commandId: "1416039398792888330", commandVersion: "1433501849713115315", description: "Clear your friends list", rank: 3, options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }] };
-    const PPM_COMMAND = { name: "ppm", commandId: "1414334983707033774", commandVersion: "1414334983707033780", description: "Check your current PackPerMinute", rank: 1, options: [] };
-    const STOP_COMMAND = { name: "stop", commandId: "1414334983707033773", commandVersion: "1414334983707033779", description: "Stop your cluster", rank: 4, options: [] };
-    const START_COMMAND = { name: "start", commandId: "1414334983707033772", commandVersion: "1414334983707033778", description: "Start your cluster", rank: 2, options: [] };
-    const STOP_CLUSTER_COMMAND = { name: "stop_cluster", commandId: "1426621887114510408", commandVersion: "1426621887114510409", description: "Stop a vip cluster (helper only)", rank: 7, options: [{ "type": 6, "name": "target", "description": "target", "required": true }] };
-    const CLOSE_GROUP_COMMAND = { name: "close_group", commandId: "1437564821078937682", commandVersion: "1437564821078937684", description: "Stop a group (helper only)", rank: 8, options: [{ "type": 3, "name": "group-id", "description": "Group ID", "required": true }] };
+    // --- COMMAND DATA (Reapa Bot) ---
+    const CLEAR_COMMAND = { name: "clear", commandId: "1474137257798537338", commandVersion: "1474137257962246193", description: "Clear your friends list", rank: 3, options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }] };
+    const PPM_COMMAND = { name: "ppm", commandId: "1474137257798537340", commandVersion: "1474137257962246195", description: "Check your current PackPerMinute", rank: 1, options: [] };
+    const STOP_COMMAND = { name: "stop", commandId: "1474137257467449504", commandVersion: "1474137257962246191", description: "Stop your cluster", rank: 4, options: [] };
+    const START_COMMAND = { name: "go", commandId: "1474137257467449503", commandVersion: "1474137257962246190", description: "Start your cluster", rank: 2, options: [] };
+    const STOP_CLUSTER_COMMAND = { name: "stop_cluster", commandId: "1474137257467449500", commandVersion: "1474137257962246187", description: "Stop a vip cluster (helper only)", rank: 7, options: [{ "type": 6, "name": "target", "description": "target", "required": true }] };
+    const CLOSE_GROUP_COMMAND = { name: "close_group", commandId: "1474137257467449499", commandVersion: "1474137257962246186", description: "Stop a group (helper only)", rank: 8, options: [{ "type": 3, "name": "group-id", "description": "Group ID", "required": true }] };
 
     // Internal state
     let interval = null;
@@ -273,8 +273,8 @@ function PPMChecker(meta) {
         }
 
         // Extract all users with their PPM values and leader status
-        // Pattern: <@userid> ... — 🎁 **PPM_VALUE**
-        const userPattern = /<@!?(\d+)>\s*([^—]*?)\s*—\s*🎁\s*\*\*([\d.]+)\*\*/g;
+        // Pattern: <@userid> ... — 🎁 **PPM_VALUE** or <@userid> ... — 🎁 PPM_VALUE ppm
+        const userPattern = /<@!?(\d+)>\s*([^—]*?)\s*—\s*🎁\s*\*{0,2}([\d.]+)\*{0,2}(?:\s*ppm)?/g;
         let match;
 
         while ((match = userPattern.exec(text)) !== null) {
@@ -317,7 +317,7 @@ function PPMChecker(meta) {
             return;
         }
         
-        const myPpmRegex = new RegExp(`<@!?${_currentUserId}>.*?🎁\\s*\\*\\*(\\d+(?:\\.\\d+)?)\\*\\*`, "s");
+        const myPpmRegex = new RegExp(`<@!?${_currentUserId}>.*?🎁\\s*\\*{0,2}(\\d+(?:\\.\\d+)?)\\*{0,2}(?:\\s*ppm)?`, "s");
 
         const searchAndResolve = (text, source, embedTitle = null) => {
             if (!text) return false;
@@ -802,7 +802,7 @@ function PPMChecker(meta) {
                 section: {
                     type: 1,
                     id: CONFIG.BOT_APPLICATION_ID,
-                    name: "Dreama",
+                    name: "Reapa",
                     icon: "17d39a9b7ea9ce8ed69a57eb99f6f37f",
                     botId: CONFIG.BOT_APPLICATION_ID,
                     isUserApp: false,
@@ -810,8 +810,8 @@ function PPMChecker(meta) {
                         description: "",
                         icon: "17d39a9b7ea9ce8ed69a57eb99f6f37f",
                         id: CONFIG.BOT_APPLICATION_ID,
-                        name: "Drenass",
-                        bot: { id: CONFIG.BOT_APPLICATION_ID, username: "Dreama", discriminator: "5958", avatar: "17d39a9b7ea9ce8ed69a57eb99f6f37f", bot: true }
+                        name: "Reapa",
+                        bot: { id: CONFIG.BOT_APPLICATION_ID, username: "Reapa", discriminator: "5958", avatar: "17d39a9b7ea9ce8ed69a57eb99f6f37f", bot: true }
                     }
                 }
             };
