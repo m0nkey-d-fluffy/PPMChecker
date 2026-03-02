@@ -2,7 +2,7 @@
  * @name PPMChecker
  * @author m0nkey.d.fluffy
  * @description Automates /ppm checks. Identifies the user's specific status and triggers a verified restart if their PPM is 0 or they are missing from the response list. Helper role users can manage group-wide PPM issues.
- * @version 1.0.14
+ * @version 1.0.15
  * @source https://github.com/m0nkey-d-fluffy/PPMChecker
  */
 
@@ -117,7 +117,7 @@ function PPMChecker(meta) {
     const CLEAR_COMMAND = { name: "clear", commandId: "1474137257798537338", commandVersion: "1474137257962246193", description: "Clear your friends list", rank: 3, options: [{ "type": 5, "name": "force-remove-all", "description": "If true, removes all friends - keep only favs", "required": false }] };
     const PPM_COMMAND = { name: "ppm", commandId: "1474137257798537340", commandVersion: "1474137257962246195", description: "Check your current PackPerMinute", rank: 1, options: [] };
     const STOP_COMMAND = { name: "stop", commandId: "1474137257467449504", commandVersion: "1474137257962246191", description: "Stop your cluster", rank: 4, options: [] };
-    const START_COMMAND = { name: "go", commandId: "1474137257467449503", commandVersion: "1474137257962246190", description: "Start your cluster", rank: 2, options: [] };
+    const START_COMMAND = { name: "start", commandId: "1476383480576217249", commandVersion: "1476385027062370469", description: "Start your cluster", rank: 2, options: [] };
     const STOP_CLUSTER_COMMAND = { name: "stop_cluster", commandId: "1474137257467449500", commandVersion: "1474137257962246187", description: "Stop a vip cluster (helper only)", rank: 7, options: [{ "type": 6, "name": "target", "description": "target", "required": true }] };
     const CLOSE_GROUP_COMMAND = { name: "close_group", commandId: "1474137257467449499", commandVersion: "1474137257962246186", description: "Stop a group (helper only)", rank: 8, options: [{ "type": 3, "name": "group-id", "description": "Group ID", "required": true }] };
 
